@@ -183,6 +183,45 @@ class TestSyntax < Factbase::Test
     )
   end
 
+  def test_round_trips_backslash_in_string_literals
+    [
+      'a\\',
+      'a\\"b',
+      'a\\\\b',
+      "a\\'b",
+      '\\',
+      '\\\\',
+      "\\'",
+      '\\"'
+    ].each do |value|
+      fb = Factbase.new
+      fb.insert.s = value
+      term = Factbase::Term.new(:eq, [:s, value])
+      found = fb.query(term.to_s).each.to_a
+      assert_equal(1, found.size, value.inspect)
+      assert_equal(value, found[0].s)
+      assert_equal(term.to_s, Factbase::Syntax.new(term.to_s).to_term.to_s, value.inspect)
+    end
+  end
+
+  def test_trailing_backslash_is_queryable
+    fb = Factbase.new
+    fb.insert.s = 'a\\'
+    assert_equal(1, fb.query("(eq s 'a\\\\')").each.to_a.size)
+  end
+
+  def test_backslash_quote_does_not_match_quote_only
+    fb = Factbase.new
+    fb.insert.s = 'a"b'
+    fb.insert.s = 'a\\"b'
+    quoted = fb.query("(eq s 'a\\\"b')").each.to_a
+    assert_equal(1, quoted.size)
+    assert_equal('a"b', quoted[0].s)
+    escaped = fb.query("(eq s 'a\\\\\\\"b')").each.to_a
+    assert_equal(1, escaped.size)
+    assert_equal('a\\"b', escaped[0].s)
+  end
+
   class FakeTerm < Factbase::Term
     def initialize(invalid)
       super

@@ -102,18 +102,30 @@ class Factbase::Syntax
     spaces = [' ', ')', "\n", "\t", "\r"]
     string = false
     comment = false
+    escaped = false
     @query.to_s.chars.each do |c|
       comment = true if !string && c == '#'
       comment = false if comment && c == "\n"
       next if comment
-      if quotes.include?(c)
-        if string && acc[-1] == '\\'
-          acc = acc[0..-2]
-        else
-          string = !string
-        end
-      end
       if string
+        if escaped
+          acc += '\\' unless c == '\\' || quotes.include?(c)
+          acc += c
+          escaped = false
+          next
+        end
+        if c == '\\'
+          escaped = true
+          next
+        end
+        if quotes.include?(c)
+          string = false
+        else
+          acc += c
+          next
+        end
+      elsif quotes.include?(c)
+        string = true
         acc += c
         next
       end
@@ -132,7 +144,7 @@ class Factbase::Syntax
         acc += c
       end
     end
-    raise(StandardError, 'String not closed') if string
+    raise(StandardError, 'String not closed') if string || escaped
     list.map do |t|
       if t.is_a?(Symbol)
         t
