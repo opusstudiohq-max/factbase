@@ -9,6 +9,7 @@ require_relative '../factbase'
 require_relative '../factbase/accum'
 require_relative '../factbase/syntax'
 require_relative '../factbase/tallied'
+require_relative 'enumerated'
 
 # A decorator of a Factbase, that checks rules on every set.
 #
@@ -27,6 +28,7 @@ require_relative '../factbase/tallied'
 # License:: MIT
 class Factbase::Rules
   decoor(:fb)
+  include Factbase::Enumerated
 
   def initialize(fb, rules, check = Check.new(rules), uid: nil)
     raise(ArgumentError, 'The "fb" is nil') if fb.nil?
@@ -46,6 +48,13 @@ class Factbase::Rules
     Query.new(@fb.query(term, maps), @check, self)
   end
 
+  def import(bytes)
+    probe = Factbase.new
+    probe.import(bytes)
+    probe.query('(always)').each { |f| @check.it(f, @fb) }
+    @fb.import(bytes)
+  end
+
   def txn
     before = @check
     later = Later.new(@uid)
@@ -53,7 +62,9 @@ class Factbase::Rules
     @fb.txn do |fbt|
       churn = Factbase::Churn.new
       begin
-        yield(Factbase::Tallied.new(Factbase::Rules.new(fbt, @rules, @check, uid: @uid), churn))
+        catch(:commit) do
+          yield(Factbase::Tallied.new(Factbase::Rules.new(fbt, @rules, @check, uid: @uid), churn))
+        end
       ensure
         @check = before
       end
@@ -128,11 +139,17 @@ class Factbase::Rules
     end
 
     def it(fact, fb)
-      return if Factbase::Syntax.new(@expr).to_term.evaluate(fact, [], fb)
-      raise(
-        ArgumentError,
-        "The fact doesn't match the #{(@expr.length > 32 ? "#{@expr[0..31]}..." : @expr).inspect} rule: #{fact}"
-      )
+      term = Factbase::Syntax.new(@expr).to_term
+      return if term.evaluate(fact, [], fb)
+      text = (@expr.length > 32 ? "#{@expr[0..31]}..." : @expr).inspect
+      failed = Check.failed(term, fact, fb)
+      text = "#{failed} of the #{text}" unless failed.nil? || failed.to_s == term.to_s
+      raise(ArgumentError, "The fact doesn't match the #{text} rule: #{fact}")
+    end
+
+    def self.failed(term, fact, fb)
+      return term unless term.op == :and
+      term.operands.find { |operand| !operand.evaluate(fact, [], fb) }
     end
   end
 

@@ -8,7 +8,7 @@ require_relative 'base'
 # Factbase::Arithmetic is a class for performing arithmetic operations.
 class Factbase::Arithmetic < Factbase::TermBase
   # Constructor.
-  # @param [Symbol] operation The arithmetic operation (e.g., :+, :-, :*, :/)
+  # @param [Symbol] operation The arithmetic operation (e.g., :+, :-, :*, :quo)
   # @param [Array] operands Operands
   def initialize(operation, operands)
     super()
@@ -32,7 +32,8 @@ class Factbase::Arithmetic < Factbase::TermBase
     v = lefts[0]
     r = rights[0]
     if v.is_a?(Time) && r.is_a?(String)
-      (num, units) = r.split
+      (num, units, *rest) = r.split
+      raise(ArgumentError, "Duration '#{r}' must be just a number and a unit") unless rest.empty?
       begin
         num = Integer(num, 10)
       rescue ArgumentError, TypeError
@@ -54,7 +55,26 @@ class Factbase::Arithmetic < Factbase::TermBase
           raise(ArgumentError, "Unknown time unit '#{units}' in '#{r}'")
         end
     end
-    raise(ArgumentError, 'Cannot divide by zero') if @op == :/ && r.is_a?(Numeric) && r.zero?
-    v.__send__(@op, r)
+    raise(ArgumentError, 'Cannot divide by zero') if @op == :quo && r.is_a?(Numeric) && r.zero?
+    _calculate(v, r)
+  end
+
+  private
+
+  # Apply the operation, refusing operands that are not numbers or times.
+  # @param [Object] left The left operand
+  # @param [Object] right The right operand
+  # @return [Object] The result of the operation
+  def _calculate(left, right)
+    [left, right].each do |o|
+      next if o.is_a?(Numeric) || o.is_a?(Time)
+      raise(
+        RuntimeError,
+        "Cannot calculate '#{left}' (#{left.class}) " \
+        "and '#{right}' (#{right.class}) using (arithmetic #{@op}): " \
+        'only numbers and times can be used'
+      )
+    end
+    left.__send__(@op, right)
   end
 end
