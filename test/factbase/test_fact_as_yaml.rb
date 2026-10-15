@@ -28,6 +28,18 @@ class TestFactAsYaml < Factbase::Test
     )
   end
 
+  def test_prints_false_values
+    f = Factbase.new.insert
+    f.flag = true
+    f.flag = false
+    f.solo = false
+    assert_equal(
+      "flag: [true, false]\n" \
+      'solo: false',
+      Factbase::FactAsYaml.new(f).to_s
+    )
+  end
+
   def test_simple_rendering
     f = Factbase.new.insert
     f._id = 1
@@ -67,5 +79,17 @@ class TestFactAsYaml < Factbase::Test
     assert(yaml_str)
     assert_includes(yaml_str, '_id')
     assert_includes(yaml_str, 'name')
+  end
+
+  def test_keeps_reserved_property_names_as_string_keys
+    fb = Factbase.new
+    f = fb.insert
+    f.yes = 1
+    f.null = 2
+    f.name = 3
+    assert_equal(
+      { 'name' => 3, 'null' => 2, 'yes' => 1 },
+      YAML.safe_load(Factbase::FactAsYaml.new(fb.query('(always)').each.to_a.first).to_s)
+    )
   end
 end
