@@ -154,11 +154,17 @@ class TestLogged < Factbase::Test
       'Inserted new fact #1',
       'Inserted new fact #2',
       'Set \'bar\' to 3 (Integer)',
-      'Set \'str\' to "Он поскорей звонит. Вбегает\n   ... Отъехать в поле к двум дубкам." (String)',
+      'Set \'str\' to "Он поскорей звонит. Вбегает\n ...тъехать в поле к двум дубкам." (String)',
       'Found 1/4 fact(s) by (exists bar)',
       'Deleted 3 fact(s) out of 4 by (not (exists bar))'
     ].each do |s|
       assert_includes(log.to_s, s, "#{log}\n")
     end
+  end
+
+  def test_keeps_the_offset_of_a_logged_time
+    t = Time.new(2026, 10, 4, 12, 0, 0, '+03:00')
+    Factbase::Logged.new(Factbase.new, Loog::NULL).insert.when = t
+    assert_equal(3 * 60 * 60, t.utc_offset, 'the logged time was moved to UTC')
   end
 end

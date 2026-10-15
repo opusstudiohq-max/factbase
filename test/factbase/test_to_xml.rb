@@ -19,7 +19,7 @@ class TestToXML < Factbase::Test
     xml = Nokogiri::XML.parse(Factbase::ToXML.new(fb).xml)
     refute_empty(xml.xpath('/fb/f[t]'))
     assert_match(
-      /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{6}Z$/,
+      /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{9}Z$/,
       xml.xpath('/fb/f/t/text()').text
     )
   end
@@ -40,6 +40,19 @@ class TestToXML < Factbase::Test
     node = Nokogiri::XML.parse(Factbase::ToXML.new(fb).xml, &:strict).xpath('/fb/f/t').first
     assert_equal('B', node['t'])
     assert_equal(bad.b, node.text.unpack1('m0').b)
+  end
+
+  def test_binary_and_latin1_rendering
+    fb = Factbase.new
+    f = fb.insert
+    f.a = "data\xC3\xA9".b
+    f.b = "\xFF\xFE".b
+    f.c = (+"data\xE9").force_encoding(Encoding::ISO_8859_1)
+    xml = Nokogiri::XML.parse(Factbase::ToXML.new(fb).xml, &:strict)
+    assert_equal("data\u00e9", xml.xpath('/fb/f/a').first.text)
+    assert_equal('B', xml.xpath('/fb/f/b').first['t'])
+    assert_equal("\xFF\xFE".b, xml.xpath('/fb/f/b').first.text.unpack1('m0').b)
+    assert_equal("data\u00e9", xml.xpath('/fb/f/c').first.text)
   end
 
   def test_complex_rendering
@@ -94,6 +107,19 @@ class TestToXML < Factbase::Test
     ].each { |x| refute_empty(xml.xpath(x), out) }
   end
 
+  def test_marks_booleans_differently_from_floats_and_times
+    fb = Factbase.new
+    f = fb.insert
+    f.truth = true
+    f.lie = false
+    f.float = 2.5
+    f.time = Time.now
+    xml = Nokogiri::XML.parse(Factbase::ToXML.new(fb).xml)
+    %w[truth lie].each { |name| refute_empty(xml.xpath("/fb/f/#{name}[@t=\"L\"]")) }
+    refute_empty(xml.xpath('/fb/f/float[@t="F"]'))
+    refute_empty(xml.xpath('/fb/f/time[@t="T"]'))
+  end
+
   def test_sorts_keys
     fb = Factbase.new
     f = fb.insert
@@ -105,6 +131,12 @@ class TestToXML < Factbase::Test
     %w[a c t x].each_with_index do |e, i|
       refute_empty(xml.xpath("/fb/f/#{e}[count(preceding-sibling::*) = #{i}]"), e)
     end
+  end
+
+  def test_keeps_nanoseconds_of_time
+    fb = Factbase.new
+    fb.insert.when = Time.utc(2026, 9, 30) + Rational(123_456_789, 1_000_000_000)
+    assert_includes(Factbase::ToXML.new(fb).xml, '2026-09-30T00:00:00.123456789Z')
   end
 
   def test_empty_factbase

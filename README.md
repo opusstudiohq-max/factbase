@@ -75,10 +75,8 @@ f = fb.insert
 You can also count the amount of changes made to a factbase:
 
 ```ruby
-require 'loog'
 require 'factbase/tallied'
-log = Loog::VERBOSE
-fb = Factbase::Tallied.new(Factbase.new, log)
+fb = Factbase::Tallied.new(Factbase.new)
 f = fb.insert
 churn = fb.churn
 assert churn.inserted == 1
@@ -178,7 +176,7 @@ There are a few terms that return non-boolean values:
 * `(at i v)` is the `i`-th value of `v`
 * `(size v)` is the cardinality of `v` (zero if `v` is `nil`)
 * `(type v)` is the type of `v`
-(`"String"`, `"Integer"`, `"Float"`, `"Time"`, or `"Array"`)
+(`"String"`, `"Integer"`, `"Float"`, `"Time"`, `"Boolean"`, or `"Array"`)
 * `(either v1 v2)` is `v2` if `v1` is `nil`
 
 It's possible to modify the facts retrieved, on fly:
@@ -215,12 +213,14 @@ There are terms that are history of search aware:
 
 * `(prev p)` returns the value of `p` property in the previously seen fact
 * `(unique p1 p2 ...)` returns true if at least one property value
-hasn't been seen yet; returns false when all specified properties
-have duplicate values in this particular combination
+hasn't been seen yet in this search; returns false when all specified
+properties have duplicate values in this particular combination
 
 The `agg` term enables sub-queries by evaluating the first argument (term)
 over all available facts, passing the entire subset to the second argument,
-and then returning the result as an atomic value:
+and then returning whatever the second argument returns. Most of the terms
+below return an atomic value, while `first` and `nth` return all values of
+the property they are asked about:
 
 * `(lt age (agg (eq gender 'F') (max age)))` selects all facts where
 the `age` is smaller than the maximum `age` of all women
@@ -231,10 +231,10 @@ with the salary average in their departments
 There are also terms that match the entire factbase
 and must be used primarily inside the `(agg ..)` term:
 
-* `(nth v p)` returns the `p` property of the fact at position `v`, counting
-  from zero (must be a non-negative integer); `(nth 0 p)` is the same as
-  `(first p)`
-* `(first p)` returns the `p` property of the first fact
+* `(nth v p)` returns all values of the `p` property of the fact at position
+  `v`, counting from zero (must be a non-negative integer); `(nth 0 p)` is
+  the same as `(first p)`
+* `(first p)` returns all values of the `p` property of the first fact
 * `(count)` returns the tally of facts
 * `(max p)` returns the maximum value of the `p` property in all facts
 * `(min p)` returns the minimum
@@ -259,8 +259,8 @@ There are some system-level terms:
 
 The entire database is a single flat [Ruby](https://www.ruby-lang.org/en/)
   `Array` of `Hash` objects held in RAM (`Factbase#@maps`). There are no
-  tables, schemas, or type enforcement beyond four scalar types: `Integer`,
-  `Float`, `String`, and `Time`. This contrasts with
+  tables, schemas, or type enforcement beyond six scalar types: `Integer`,
+  `Float`, `String`, `Time`, `TrueClass`, and `FalseClass`. This contrasts with
   [SQLite](https://sqlite.org/) (fixed-column tables on disk) and
   [MongoDB](https://www.mongodb.com/) (typed document collections). New
   programmers must understand that all data vanishes on process exit unless
