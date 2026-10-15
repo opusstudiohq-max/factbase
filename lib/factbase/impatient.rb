@@ -6,6 +6,7 @@
 require 'decoor'
 require 'tago'
 require 'timeout'
+require_relative 'enumerated'
 require_relative 'syntax'
 
 # A decorator of a Factbase, that terminates long-running queries.
@@ -21,9 +22,12 @@ class Factbase::Impatient
     raise(ArgumentError, 'The "fb" is nil') if fb.nil?
     @origin = fb
     @timeout = Float(timeout)
+    raise(ArgumentError, "The \"timeout\" must be positive, while #{timeout} given") unless @timeout.positive?
+    raise(ArgumentError, "The \"timeout\" must be finite, while #{timeout} given") unless @timeout.finite?
   end
 
   decoor(:origin)
+  include Factbase::Enumerated
 
   def insert
     @origin.insert
@@ -44,6 +48,8 @@ class Factbase::Impatient
   #
   # This is an internal class, it is not supposed to be instantiated directly.
   class Query
+    include Enumerable
+
     def initialize(term, maps, timeout, fb)
       @term = term
       @maps = maps
@@ -57,15 +63,25 @@ class Factbase::Impatient
 
     def each(fb = @fb, params = {}, &)
       return to_enum(__method__, fb, params) unless block_given?
-      facts =
-        impatient('each') do
-          @fb.query(@term, @maps).each(fb, params).to_a
-        end
+      enum = @fb.query(@term, @maps).each(fb, params)
       n = 0
-      facts.each do |f|
-        yield(f)
+      left = @timeout
+      stopped = nil
+      loop do
+        # rubocop:disable Elegant/NoRedundantVariable
+        started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+        fact = impatient('each', left) { enum.next }
+        # rubocop:enable Elegant/NoRedundantVariable
+        left -= Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
+        begin
+          yield(fact)
+        rescue StopIteration => e
+          stopped = e
+          break
+        end
         n += 1
       end
+      raise(stopped) if stopped
       n
     end
 
@@ -83,8 +99,9 @@ class Factbase::Impatient
 
     private
 
-    def impatient(name, &)
-      Timeout.timeout(@timeout, &)
+    def impatient(name, budget = @timeout, &)
+      raise(StandardError, "#{name}() ran out of time, fb size is #{@fb.size}: #{@term}") if budget <= 0
+      Timeout.timeout(budget, &)
     rescue Timeout::Error => e
       raise(
         StandardError,
