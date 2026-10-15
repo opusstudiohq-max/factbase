@@ -56,6 +56,17 @@ class TestAccum < Factbase::Test
     assert_equal(2, a['foo'].size)
   end
 
+  def test_keeps_insertion_order_in_both_modes
+    [true, false].each do |pass|
+      f = Factbase.new.insert
+      f.foo = 1
+      a = Factbase::Accum.new(f, {}, pass)
+      a.foo = 2
+      a.foo = 3
+      assert_equal([1, 2, 3], a['foo'], "wrong order when pass=#{pass}")
+    end
+  end
+
   def test_empties
     assert_nil(Factbase::Accum.new(Factbase::Fact.new({}), {}, false)['foo'])
   end
@@ -83,5 +94,15 @@ class TestAccum < Factbase::Test
     assert_includes(a.all_properties, 'x')
     assert_includes(a.all_properties, 'y')
     assert_includes(a.all_properties, 'z')
+  end
+
+  def test_forgets_a_value_the_fact_rejected
+    fb = Factbase.new
+    fb.insert.foo = 1
+    result = fb.query('(exists foo)').each.first
+    assert_raises(ArgumentError) { result.foo = nil }
+    result.foo = 2
+    assert_equal(2, result.foo)
+    assert_equal([1, 2], result['foo'])
   end
 end
