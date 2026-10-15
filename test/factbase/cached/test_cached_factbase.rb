@@ -20,6 +20,28 @@ class TestCachedFactbase < Factbase::Test
     assert_equal(1, fb.query('(and (eq foo_bar 1) (eq bar "test"))').each.to_a.size)
   end
 
+  def test_joins_into_every_fact
+    fb = Factbase::CachedFactbase.new(Factbase.new)
+    fb.insert.name = 'a'
+    fb.insert.name = 'b'
+    assert_equal(
+      [%w[a b], %w[a b]],
+      fb.query('(and (exists name) (join "all<=name" (always)))').each.map { |f| f['all'] }
+    )
+  end
+
+  def test_evaluates_a_defn_term_for_every_fact
+    Factbase::Term.new(:defn, [:foo_is_bar, 'fact["foo"].first == "bar"']).evaluate(nil, [], Factbase.new)
+    begin
+      fb = Factbase::CachedFactbase.new(Factbase.new)
+      fb.insert.foo = 'bar'
+      fb.insert.foo = 'baz'
+      assert_equal(['bar'], fb.query('(foo_is_bar)').each.map { |f| f['foo'].first })
+    ensure
+      Factbase::Term.new(:undef, [:foo_is_bar]).evaluate(nil, [], Factbase.new)
+    end
+  end
+
   def test_queries_after_update_through_a_parameterized_query
     fb = Factbase::CachedFactbase.new(Factbase.new)
     fb.insert.then { |f| f.foo = 1 }
@@ -103,5 +125,24 @@ class TestCachedFactbase < Factbase::Test
     end
     assert_equal(1, fb.size)
     assert_equal(['kept'], fb.query('(exists foo)').each.to_a.map(&:foo))
+  end
+
+  def test_reads_a_property_named_like_a_kernel_method
+    fb = Factbase::CachedFactbase.new(Factbase.new)
+    fb.insert.rand = 'hello'
+    assert_equal('hello', fb.query('(always)').each.to_a.first.rand)
+  end
+
+  def test_traces_every_fact
+    fb = Factbase::CachedFactbase.new(Factbase.new)
+    3.times { |i| fb.insert.x = i }
+    assert_output("(traced (always)) -> true\n" * 3) do
+      fb.query('(and (exists x) (traced (always)))').each.to_a
+    end
+  end
+
+  def test_refuses_a_keyword_it_does_not_read
+    fb = Factbase.new
+    assert_raises(ArgumentError) { Factbase::CachedFact.new(fb.insert, {}, fresh: true) }
   end
 end
