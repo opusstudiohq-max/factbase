@@ -23,12 +23,14 @@ class Factbase::ToFloat < Factbase::TermBase
     assert_args(1)
     vv = _values(0, fact, maps, fb)
     return if vv.nil?
+    raise(ArgumentError, 'Too many values at first position, one expected') unless vv.size == 1
     to_float(vv[0])
   end
 
   private
 
   def to_float(value)
+    return Float(value) if value.is_a?(Time)
     Float(value.to_s)
   rescue ArgumentError, TypeError => e
     raise(RuntimeError, "Cannot convert '#{value}' to Float in (to_float ...): #{e.message}")

@@ -23,14 +23,16 @@ class Factbase::ToInteger < Factbase::TermBase
     assert_args(1)
     vv = _values(0, fact, maps, fb)
     return if vv.nil?
+    raise(ArgumentError, 'Too many values at first position, one expected') unless vv.size == 1
     to_integer(vv[0])
   end
 
   private
 
   def to_integer(value)
+    return Integer(value, 10) if value.is_a?(String)
     Integer(value)
-  rescue ArgumentError, TypeError => e
+  rescue ArgumentError, TypeError, FloatDomainError => e
     raise(RuntimeError, "Cannot convert '#{value}' to Integer in (to_integer ...): #{e.message}")
   end
 end

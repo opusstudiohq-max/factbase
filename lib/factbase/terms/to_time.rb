@@ -23,12 +23,15 @@ class Factbase::ToTime < Factbase::TermBase
     assert_args(1)
     vv = _values(0, fact, maps, fb)
     return if vv.nil?
+    raise(ArgumentError, 'Too many values at first position, one expected') unless vv.size == 1
     parse(vv[0])
   end
 
   private
 
   def parse(value)
+    return value if value.is_a?(Time)
+    return Time.at(value).utc if value.is_a?(Integer) || value.is_a?(Float)
     Time.parse(value.to_s)
   rescue ArgumentError => e
     raise(RuntimeError, "Cannot parse '#{value}' as Time in (to_time ...): #{e.message}")
