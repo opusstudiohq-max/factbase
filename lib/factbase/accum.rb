@@ -12,6 +12,8 @@ require_relative '../factbase'
 # Copyright:: Copyright (c) 2024-2026 Yegor Bugayenko
 # License:: MIT
 class Factbase::Accum
+  SCALARS = [Float, Integer, String, Time, TrueClass, FalseClass].freeze
+
   # Ctor.
   # @param [Factbase::Fact] fact The fact to decorate
   # @param [Hash] props Hash of props that were set
@@ -34,20 +36,17 @@ class Factbase::Accum
     k = args[0].to_s
     if k.end_with?('=')
       kk = k[0..-2]
+      @fact.method_missing(*args) if @pass
       @props[kk] = [] if @props[kk].nil?
       @props[kk] << args[1]
-      @fact.method_missing(*args) if @pass
     elsif k == '[]'
       kk = args[1].to_s
-      vv =
-        if @pass
-          []
-        else
-          @props[kk].nil? ? [] : @props[kk]
-        end
+      vv = []
       vvv = @fact.method_missing(*args)
+      vvv = [vvv] if SCALARS.any? { |t| vvv.is_a?(t) }
       vvv = [vvv] unless vvv.nil? || vvv.respond_to?(:to_a)
       vv += vvv.to_a unless vvv.nil?
+      vv += @props[kk] unless @pass || @props[kk].nil?
       if vv.empty?
         @props[kk].nil? ? nil : @props[kk]
       else
