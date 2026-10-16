@@ -96,6 +96,17 @@ class TestRules < Factbase::Test
     assert_equal(0, fb.size)
   end
 
+  def test_checks_rules_when_txn_throws_commit
+    fb = Factbase::Rules.new(Factbase.new, '(exists foo)')
+    assert_raises(ArgumentError) do
+      fb.txn do |fbt|
+        fbt.insert.bar = 1
+        throw(:commit)
+      end
+    end
+    assert_equal(0, fb.size)
+  end
+
   def test_defends_against_id_duplicates
     fb = Factbase::Rules.new(Factbase.new, '(always)', uid: 'id')
     assert_raises(StandardError) do
@@ -139,7 +150,7 @@ class TestRules < Factbase::Test
       end
     end
     assert(ok)
-    assert_equal(0, fb.query('(eq hello $v)').each(v: 42).to_a.size)
+    assert_equal(0, fb.query('(eq hello $v)').each(fb, 'v' => [42]).to_a.size)
   end
 
   def test_error_message_includes_expression
@@ -168,5 +179,36 @@ class TestRules < Factbase::Test
       '...',
       'Error message should truncate long expressions'
     )
+  end
+
+  def test_error_message_names_failed_part_of_long_conjunction
+    f = Factbase::Rules.new(
+      Factbase.new,
+      <<~RULE
+        (and
+          # The rule is intentionally long enough that its beginning is not useful.
+          # This is how a rule read from a file normally begins.
+          (always)
+          (always)
+          (always)
+          (exists foo)
+        )
+      RULE
+    ).insert
+    message = assert_raises(StandardError) { f.bar = 42 }.message
+    assert_includes(message, '(exists foo)', 'Error message should name the failed term')
+    refute_includes(message, 'intentionally long enough', 'Error message should not name the header')
+  end
+
+  def test_refuses_to_import_a_fact_that_breaks_the_rule
+    source = Factbase.new
+    source.insert.bar = 1
+    fb = Factbase::Rules.new(Factbase.new, '(exists foo)')
+    assert_raises(ArgumentError) { fb.import(source.export) }
+    assert_equal(0, fb.size)
+    good = Factbase.new
+    good.insert.foo = 1
+    fb.import(good.export)
+    assert_equal(1, fb.size)
   end
 end

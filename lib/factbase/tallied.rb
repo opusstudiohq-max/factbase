@@ -7,6 +7,7 @@ require 'decoor'
 require 'others'
 require_relative '../factbase'
 require_relative 'churn'
+require_relative 'enumerated'
 
 # A decorator of a Factbase, that counts all operations and then returns
 # an instance of Factbase::Churn.
@@ -24,6 +25,7 @@ class Factbase::Tallied
   end
 
   decoor(:fb)
+  include Factbase::Enumerated
 
   def insert
     @churn.append(1, 0, 0)
@@ -34,19 +36,28 @@ class Factbase::Tallied
     Query.new(@fb.query(query, maps), @churn, @fb)
   end
 
+  def import(bytes)
+    probe = Factbase.new
+    probe.import(bytes)
+    @fb.import(bytes)
+    @churn.append(probe.size, 0, 0)
+  end
+
   def txn
-    before = @churn.dup
+    scratch = Factbase::Churn.new
     commit = false
     @fb.txn do |fbt|
       catch(:rollback) do
-        yield(Factbase::Tallied.new(fbt, @churn))
+        thrown = true
+        catch(:commit) do
+          yield(Factbase::Tallied.new(fbt, scratch))
+          thrown = false
+        end
         commit = true
+        throw(:commit) if thrown
       end
-    rescue Factbase::Rollback => e
-      @churn = before
-      raise(e)
     ensure
-      @churn = before unless commit
+      @churn.append(scratch.inserted, scratch.deleted, scratch.added) if commit
     end
   end
 
@@ -78,6 +89,8 @@ class Factbase::Tallied
   #
   # This is an internal class, it is not supposed to be instantiated directly.
   class Query
+    include Enumerable
+
     def initialize(query, churn, fb)
       @query = query
       @churn = churn

@@ -368,6 +368,25 @@ class TestQuery < Factbase::Test
     assert_equal([nil], fb.each.to_a.map { |f| f['marked'] })
   end
 
+  def test_searches_twice_with_the_same_query
+    fb = Factbase.new
+    %w[a a b].each { |v| fb.insert.foo = v }
+    q = fb.query('(unique foo)')
+    q.each.to_a
+    assert_equal(
+      [['a'], ['b']], q.each.to_a.map { |f| f['foo'] },
+      'the second search does not find what the first one found'
+    )
+  end
+
+  def test_deletes_after_searching_with_the_same_query
+    fb = Factbase.new
+    %w[a a b].each { |v| fb.insert.foo = v }
+    q = fb.query('(unique foo)')
+    q.each.to_a
+    assert_equal(2, q.delete!, 'the facts found by the search are not deleted after it')
+  end
+
   def test_deletes_exactly_what_each_yields
     fb = Factbase.new
     %w[a a b].each { |v| fb.insert.foo = v }
@@ -382,6 +401,17 @@ class TestQuery < Factbase::Test
     assert_equal(0, fb.size)
   end
 
+  def test_deletes_by_agg_over_all_facts
+    fb = Factbase.new
+    [['trip', 20], ['food', 3], ['food', 3], ['food', 3]].each do |c, v|
+      f = fb.insert
+      f.cat = c
+      f.cost = v
+    end
+    assert_equal(1, fb.query('(gt (agg (eq cat $cat) (sum cost)) 10)').delete!)
+    assert_equal(3, fb.size)
+  end
+
   def test_error_names_the_term_not_the_object
     fb = Factbase.new
     fb.insert.what = 'issue'
@@ -389,6 +419,15 @@ class TestQuery < Factbase::Test
       "Incorrect type FalseClass returned by (eq what 'issue')",
       assert_raises(StandardError) { fb.query('(eq what "issue")').one }.message
     )
+  end
+
+  def test_deletes_the_fact_it_selects_when_another_differs_only_by_float
+    fb = Factbase.new
+    fb.insert.x = 1
+    fb.insert.x = 1.0
+    assert_equal([Float], fb.query('(head 1 (inverted (always)))').each.map { |f| f.x.class })
+    assert_equal(1, fb.query('(head 1 (inverted (always)))').delete!)
+    assert_equal([Integer], fb.query('(always)').each.map { |f| f.x.class }, 'the fact with 1 was deleted instead')
   end
 
   private
