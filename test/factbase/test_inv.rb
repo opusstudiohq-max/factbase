@@ -41,4 +41,19 @@ class TestInv < Factbase::Test
     f = fb.insert
     assert_equal(42, f.id)
   end
+
+  def test_checks_imported_facts
+    src = Factbase.new
+    src.insert.b = 'here we should crash'
+    fb =
+      Factbase::Inv.new(Factbase.new) do |p, v|
+        raise(StandardError, 'oops') if v.is_a?(String) && p == 'b'
+      end
+    assert_raises(StandardError) { fb.import(src.export) }
+    assert_equal(0, fb.size, 'A refused fact must not be imported')
+  end
+
+  def test_refuses_a_nil_factbase
+    assert_raises(ArgumentError) { Factbase::Inv.new(nil) { |_p, _v| true } }
+  end
 end

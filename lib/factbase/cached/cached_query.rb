@@ -33,6 +33,7 @@ class Factbase::CachedQuery
   end
 
   # Iterate facts one by one.
+  # @param [Factbase] fb The factbase
   # @param [Hash] params Optional params accessible in the query via the "$" symbol
   # @yield [Fact] Facts one-by-one
   # @return [Integer] Total number of facts yielded
@@ -40,22 +41,33 @@ class Factbase::CachedQuery
     return to_enum(__method__, fb, params) unless block_given?
     invalidate_if_dirty!
     c = 0
-    facts(fb, params).each do |f|
-      c += 1
-      yield(Factbase::CachedFact.new(f, @cache))
+    key = "each #{fb.object_id} #{@origin}"
+    if @cacheable && !@cache[key].nil?
+      @cache[key].each do |f|
+        c += 1
+        yield(Factbase::CachedFact.new(f, @cache))
+      end
+    else
+      collected = []
+      @origin.each(fb, params) do |f|
+        collected << f
+        c += 1
+        yield(Factbase::CachedFact.new(f, @cache))
+      end
+      @cache[key] = collected if @cacheable
     end
     c
   end
 
   # Read a single value.
-  # @param [Hash] fb The factbase
-  # @param [Hash] params Optional params accessible in the query via the "$" symbol (unused)
+  # @param [Factbase] fb The factbase
+  # @param [Hash] params Optional params accessible in the query via the "$" symbol
   # @return The value evaluated
   def one(fb = @fb, params = {})
     invalidate_if_dirty!
     return @origin.one(fb, params) unless @cacheable
     key = "one: #{@origin} #{params}"
-    @cache[key] = @origin.one(fb, params) if @cache[key].nil?
+    @cache[key] = @origin.one(fb, params) unless @cache.key?(key)
     @cache[key]
   end
 
@@ -67,17 +79,6 @@ class Factbase::CachedQuery
   end
 
   private
-
-  # The facts the query yields, from the cache when the term allows it.
-  # @param [Factbase] fb The factbase
-  # @param [Hash] params Optional params accessible in the query via the "$" symbol
-  # @return [Array<Factbase::Fact>] The facts
-  def facts(fb, params)
-    return @origin.each(fb, params).to_a unless @cacheable
-    key = "each #{@origin}"
-    @cache[key] = @origin.each(fb, params).to_a if @cache[key].nil?
-    @cache[key]
-  end
 
   # Clear cache if it was marked dirty by a fresh fact insertion.
   # This implements lazy invalidation: we don't clear on every insert,

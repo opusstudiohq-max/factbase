@@ -84,4 +84,21 @@ class TestTaped < Factbase::Test
     assert_equal(1, t.added.size)
     assert_equal(1, t.deleted.size)
   end
+
+  def test_gives_a_copy_from_to_a_of_an_array
+    values = [20]
+    Factbase::Taped::TapedArray.new(values, 1, []).to_a << 30
+    assert_equal([20], values)
+  end
+
+  def test_sorts_hash_without_block
+    seed = Random.new_seed
+    rnd = Random.new(seed)
+    names = Array.new(rnd.rand(2..8)) { |i| "p#{i}#{[*'a'..'z'].sample(rnd.rand(1..8), random: rnd).join}" }
+    map = names.shuffle(random: rnd).to_h { |n| [n, [rnd.rand(1..1000)]] }
+    assert_equal(
+      map.sort, Factbase::Taped::TapedHash.new(map, []).sort,
+      "taped hash of #{names.inspect} was not sorted by its keys, seed #{seed}"
+    )
+  end
 end

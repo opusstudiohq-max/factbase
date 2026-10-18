@@ -4,9 +4,11 @@
 # SPDX-License-Identifier: MIT
 
 require 'decoor'
+require 'ellipsized'
 require 'others'
 require 'tago'
 require 'time'
+require_relative 'enumerated'
 require_relative 'syntax'
 
 # A decorator of a Factbase, that logs all operations.
@@ -34,10 +36,15 @@ class Factbase::Logged
   end
 
   decoor(:origin)
+  include Factbase::Enumerated
 
   def insert
-    @tube.say(Process.clock_gettime(MONO), "Inserted new fact ##{@origin.size} in #{Time.now.ago}")
-    Fact.new(@origin.insert, tube: @tube)
+    start = Time.now
+    Process.clock_gettime(MONO).then do |mono|
+      Fact.new(@origin.insert, tube: @tube).tap do
+        @tube.say(mono, "Inserted new fact ##{@origin.size} in #{start.ago}")
+      end
+    end
   end
 
   def query(term, maps = nil)
@@ -46,6 +53,7 @@ class Factbase::Logged
   end
 
   def txn
+    start = Time.now
     mono = Process.clock_gettime(MONO)
     id = nil
     rollback = false
@@ -66,9 +74,9 @@ class Factbase::Logged
         raise(e)
       end
     if rollback
-      @tube.say(mono, "Txn ##{id} rolled back in #{Time.now.ago}")
+      @tube.say(mono, "Txn ##{id} rolled back in #{start.ago}")
     else
-      @tube.say(mono, "Txn ##{id} touched #{r} in #{Time.now.ago}")
+      @tube.say(mono, "Txn ##{id} touched #{r} in #{start.ago}")
     end
     r
   end
@@ -121,9 +129,15 @@ class Factbase::Logged
       k = args[0].to_s
       v = args[1]
       if k.end_with?('=')
-        s = v.is_a?(Time) ? v.utc.iso8601 : v.to_s
-        s = v.to_s.inspect if v.is_a?(String)
-        s = "#{s[0..(MAX_LENGTH / 2)]}...#{s[(-MAX_LENGTH / 2)..]}" if s.length > MAX_LENGTH
+        s =
+          if v.is_a?(Time)
+            v.getutc.iso8601
+          elsif v.is_a?(String)
+            v.inspect
+          else
+            v.to_s
+          end
+        s = s.ellipsized(MAX_LENGTH)
         @tube.say(mono, "Set '#{k[0..-2]}' to #{s} (#{v.class})")
       end
       r
@@ -134,6 +148,8 @@ class Factbase::Logged
   #
   # This is an internal class, it is not supposed to be instantiated directly.
   class Query
+    include Enumerable
+
     def initialize(term, maps, tube, fb)
       @term = term
       @maps = maps
@@ -153,7 +169,10 @@ class Factbase::Logged
       qry = @fb.query(@term, @maps)
       tail =
         Factbase::Logged.elapsed do
-          r = qry.each(fb, params, &)
+          r =
+            qry.each(fb, params) do |f|
+              yield(Factbase::Logged::Fact.new(f, tube: @tube))
+            end
         end
       unless r.is_a?(Integer)
         raise(StandardError, ".query(#{@termtext.inspect}).each() of #{qry.class} returned #{r.class}")
@@ -165,9 +184,9 @@ class Factbase::Logged
       end
       q ||= @termtext
       if r.zero?
-        @tube.say(mono, "Zero/#{@fb.size} facts found by #{q} #{tail}")
+        @tube.say(mono, "Zero/#{total} facts found by #{q} #{tail}")
       else
-        @tube.say(mono, "Found #{r}/#{@fb.size} fact(s) by #{q} #{tail}")
+        @tube.say(mono, "Found #{r}/#{total} fact(s) by #{q} #{tail}")
       end
       r
     end
@@ -182,7 +201,10 @@ class Factbase::Logged
       if r.nil?
         @tube.say(mono, "Nothing found by '#{@termtext}' #{tail}")
       else
-        @tube.say(mono, "Found #{r} (#{r.class}) by '#{@termtext}' #{tail}")
+        @tube.say(
+          mono,
+          "Found #{r.to_s.ellipsized(Factbase::Logged::Fact::MAX_LENGTH)} (#{r.class}) by '#{@termtext}' #{tail}"
+        )
       end
       r
     end
@@ -190,7 +212,7 @@ class Factbase::Logged
     def delete!(fb = @fb)
       r = nil
       mono = Process.clock_gettime(Factbase::Logged::MONO)
-      before = @fb.size
+      before = total
       tail =
         Factbase::Logged.elapsed do
           r = @fb.query(@term, @maps).delete!(fb)
@@ -205,10 +227,18 @@ class Factbase::Logged
       end
       r
     end
+
+    private
+
+    def total
+      @maps.nil? ? @fb.size : @maps.size
+    end
   end
 
   def self.elapsed
-    yield
-    "in #{Time.now.ago}"
+    Time.now.then do |start|
+      yield
+      "in #{start.ago}"
+    end
   end
 end

@@ -73,7 +73,7 @@ require_relative 'terms/zero'
 #  require 'factbase/term'
 #  f = Factbase::Fact.new({ 'foo' => [42, 256, 'Hello, world!'] })
 #  t = Factbase::Term.new(:lt, [:foo, 50])
-#  assert(t.evaluate(f))
+#  assert(t.evaluate(f, [], Factbase.new))
 #
 # The design of this class may look ugly, since it has a large number of
 # methods, each of which corresponds to a different type of a +Term+. A much
@@ -90,6 +90,11 @@ require_relative 'terms/zero'
 # Copyright:: Copyright (c) 2024-2026 Yegor Bugayenko
 # License:: MIT
 class Factbase::Term < Factbase::TermBase
+  # An error that already names the term it happened in and the place
+  # in the code where it was raised. It is not decorated again by the
+  # enclosing terms, in order to keep the original message readable.
+  class Wrapped < RuntimeError; end
+
   attr_reader :op, :operands
 
   TERMS = {
@@ -178,22 +183,21 @@ class Factbase::Term < Factbase::TermBase
   # should be evaluated. If no prediction can be made,
   # the same list is returned.
   # @param [Array<Hash>, Factbase::Taped, Factbase::LazyTaped] maps Records to iterate, maybe
+  # @param [Factbase] fb Factbase to use for sub-queries
   # @param [Hash] params Params to use (keys must be strings, not symbols, with values as arrays)
   # @return [Array<Hash>] Records to iterate
   def predict(maps, fb, params)
-    m = :"#{@op}_predict"
-    if @terms.key?(@op)
-      t = @terms[@op]
-      if t.respond_to?(:predict)
-        t.predict(maps, fb, params)
-      else
-        maps
-      end
-    elsif respond_to?(m)
-      __send__(m, maps, fb, params)
-    else
-      maps
-    end
+    return maps unless @terms.key?(@op)
+    t = @terms[@op]
+    return maps unless t.respond_to?(:predict)
+    t.predict(maps, fb, params)
+  end
+
+  # Forget what was remembered while earlier facts were evaluated.
+  # @return [Array] The operands
+  def forget
+    @terms[@op].forget if @terms.key?(@op)
+    @operands.each { |o| o.forget if o.is_a?(Factbase::TermBase) }
   end
 
   # Evaluate term on a fact
@@ -204,28 +208,24 @@ class Factbase::Term < Factbase::TermBase
   def evaluate(fact, maps, fb)
     if @terms.key?(@op)
       @terms[@op].evaluate(fact, maps, fb)
-    else
+    elsif @op != :initialize && Factbase::Term.private_method_defined?(@op, false)
       __send__(@op, fact, maps, fb)
+    else
+      raise(NoMethodError, "There is no term '#{@op}'")
     end
+  rescue Factbase::Term::Wrapped => e
+    raise(e)
   rescue NoMethodError => e
-    raise(RuntimeError, "Probably the term '#{@op}' is not defined at #{self}: #{e.message}")
+    raise(Factbase::Term::Wrapped, "Probably the term '#{@op}' is not defined at #{self}: #{e.message}")
   rescue StandardError => e
-    raise(RuntimeError, "#{e.message.inspect} at #{self} at #{e.backtrace[0]}")
+    raise(Factbase::Term::Wrapped, "#{e.message.inspect} at #{self} at #{e.backtrace[0]}")
   end
 
   # Simplify it if possible.
   # @return [Factbase::Term] New term or itself
   def simplify
-    if @terms.key?(@op) && @terms[@op].respond_to?(:simplify)
-      @terms[@op].simplify
-    else
-      m = "#{@op}_simplify"
-      if respond_to?(m, true)
-        __send__(m)
-      else
-        self
-      end
-    end
+    return self unless @terms.key?(@op) && @terms[@op].respond_to?(:simplify)
+    @terms[@op].simplify
   end
 
   # Does it have any dependencies on a fact?
@@ -236,6 +236,8 @@ class Factbase::Term < Factbase::TermBase
   # @return [Boolean] TRUE if static
   def static?
     return true if @op == :agg
+    return false if %i[join as traced unique prev].include?(@op)
+    return false if custom?
     @operands.each do |o|
       return false if o.is_a?(Factbase::Term) && !o.static?
       return false if o.is_a?(Symbol) && !o.to_s.start_with?('$')
@@ -254,15 +256,27 @@ class Factbase::Term < Factbase::TermBase
     false
   end
 
+  private
+
+  # Is it a term made by +defn+? Its Ruby body may read the fact and the factbase,
+  # so its result can't be known from its operands alone.
+  def custom?
+    return false if TERMS.key?(@op)
+    return false unless Factbase::Term.private_method_defined?(@op, false)
+    Factbase::Term.instance_method(@op).source_location&.first != __FILE__
+  end
+
   def at(fact, maps, fb)
     assert_args(2)
     i = _values(0, fact, maps, fb)
+    return if i.nil?
     raise(RuntimeError, "Too many values (#{i.size}) at first position, one expected") unless i.size == 1
     i = i[0]
     return if i.nil?
+    raise(ArgumentError, "An integer position is expected, but #{i} provided") unless i.is_a?(Integer)
     raise(ArgumentError, "A non-negative position is expected, but #{i} provided") if i.negative?
     v = _values(1, fact, maps, fb)
-    return if v.nil?
+    return if v.nil? || i >= v.size
     v[i]
   end
 end
