@@ -1,9 +1,9 @@
 # frozen_string_literal: true
 
-require_relative '../../lib/factbase/syntax'
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026 Yegor Bugayenko
 # SPDX-License-Identifier: MIT
 
+require_relative '../../lib/factbase/syntax'
 require_relative '../test__helper'
 
 # Syntax test.
@@ -11,6 +11,21 @@ require_relative '../test__helper'
 # Copyright:: Copyright (c) 2024-2026 Yegor Bugayenko
 # License:: MIT
 class TestSyntax < Factbase::Test
+  def test_matches_properties_named_like_delimiter_tokens
+    fb = Factbase.new
+    f = fb.insert
+    f.open = 1
+    f.close = 2
+    assert_equal(1, fb.query('(and (eq open 1) (eq close 2))').count)
+    assert_equal(1, fb.query('(and (exists open) (exists close))').count)
+  end
+
+  def test_keeps_parentheses_inside_string_literals
+    fb = Factbase.new
+    fb.insert.text = '()'
+    assert_equal(1, fb.query('(eq text "()")').count)
+  end
+
   def test_parses_string_right
     [
       "(foo 'abc')",
@@ -44,8 +59,8 @@ class TestSyntax < Factbase::Test
 
   def test_makes_static_terms
     {
-      '(foo bar)' => false,
-      '(foo "bar")' => true,
+      '(never_defined bar)' => false,
+      '(never_defined "bar")' => true,
       '(agg (always) (max id))' => true
     }.each do |q, a|
       assert_equal(a, Factbase::Syntax.new(q).to_term.static?)
@@ -99,6 +114,19 @@ class TestSyntax < Factbase::Test
     assert(Factbase::Syntax.new('(eq t 1.5e-10)').to_term.evaluate({ 't' => 1.5e-10 }, [], Factbase.new))
   end
 
+  def test_parses_float_with_uppercase_exponent
+    assert(Factbase::Syntax.new('(eq ratio 1.5E-10)').to_term.evaluate({ 'ratio' => 1.5e-10 }, [], Factbase.new))
+  end
+
+  def test_parses_float_with_unsigned_exponent
+    assert(Factbase::Syntax.new('(eq ratio 1.2e3)').to_term.evaluate({ 'ratio' => 1200.0 }, [], Factbase.new))
+  end
+
+  def test_parses_float_without_a_dot
+    assert(Factbase::Syntax.new('(eq t 1e10)').to_term.evaluate({ 't' => 1e10 }, [], Factbase.new))
+    assert(Factbase::Syntax.new('(eq t 2e-3)').to_term.evaluate({ 't' => 2e-3 }, [], Factbase.new))
+  end
+
   def test_names_the_term_with_too_few_operands
     %w[size contains gte plus].each do |name|
       fb = Factbase.new
@@ -108,12 +136,66 @@ class TestSyntax < Factbase::Test
     end
   end
 
+  def test_parses_boolean_literals
+    assert(Factbase::Syntax.new('(eq flag true)').to_term.evaluate({ 'flag' => [true] }, [], Factbase.new))
+    assert(Factbase::Syntax.new('(eq flag false)').to_term.evaluate({ 'flag' => [false] }, [], Factbase.new))
+  end
+
   def test_parses_a_time_with_fractional_seconds
     t = Time.parse('2026-09-05T07:00:00.123456Z')
     assert(
       Factbase::Syntax.new("(eq when #{t.utc.iso8601(6)})").to_term.evaluate(
         { 'when' => [t] }, [], Factbase.new
       )
+    )
+  end
+
+  def test_rejects_an_impossible_date_literal
+    assert_raises(Factbase::Syntax::Broken) do
+      Factbase::Syntax.new('(eq created 2012-02-30T00:00:00Z)').to_term
+    end
+  end
+
+  def test_accepts_a_day_the_julian_calendar_skipped
+    assert(
+      Factbase::Syntax.new('(eq t 1582-10-10T00:00:00Z)').to_term.evaluate(
+        { 't' => [Time.utc(1582, 10, 10)] }, [], Factbase.new
+      ),
+      'the literal of a Gregorian day skipped by the Julian calendar does not match its time'
+    )
+  end
+
+  def test_finds_a_fact_stored_on_a_day_the_julian_calendar_skipped
+    fb = Factbase.new
+    fb.insert.t = Time.utc(1582, 10, 14, 23, 59, 59)
+    assert_equal(1, fb.query('(eq t 1582-10-14T23:59:59Z)').each.to_a.size, 'a fact on 1582-10-14 is not found')
+  end
+
+  def test_rejects_a_leap_day_only_the_julian_calendar_has
+    assert_raises(Factbase::Syntax::Broken, 'a Julian leap day is not refused') do
+      Factbase::Syntax.new('(eq t 1500-02-29T00:00:00Z)').to_term
+    end
+  end
+
+  def test_rejects_a_century_leap_day_the_gregorian_calendar_drops
+    assert_raises(Factbase::Syntax::Broken, 'a century leap day dropped by Gregorian calendar is not refused') do
+      Factbase::Syntax.new('(eq t 1700-02-29T00:00:00Z)').to_term
+    end
+  end
+
+  def test_accepts_a_leap_day_both_calendars_have
+    assert(
+      Factbase::Syntax.new('(eq t 1600-02-29T00:00:00Z)').to_term.evaluate(
+        { 't' => [Time.utc(1600, 2, 29)] }, [], Factbase.new
+      ),
+      'the literal of a leap day of both calendars does not match its time'
+    )
+  end
+
+  def test_prints_a_time_with_fractional_seconds
+    assert_equal(
+      '(eq t 2024-01-01T00:00:00.500000000Z)',
+      Factbase::Syntax.new('(eq t 2024-01-01T00:00:00.5Z)').to_term.to_s
     )
   end
 
@@ -167,6 +249,50 @@ class TestSyntax < Factbase::Test
     end
   end
 
+  def test_cannot_parse_term_followed_by_word
+    seed = Random.new_seed
+    rnd = Random.new(seed)
+    q = "(eq x 1) #{Array.new(rnd.rand(1..16)) { [*'a'..'z'].sample(random: rnd) }.join}"
+    assert_raises(Factbase::Syntax::Broken, "trailing word in #{q.inspect} was ignored, seed #{seed}") do
+      Factbase::Syntax.new(q).to_term
+    end
+  end
+
+  def test_cannot_parse_term_followed_by_glued_word
+    seed = Random.new_seed
+    rnd = Random.new(seed)
+    q = "(eq x 1)#{Array.new(rnd.rand(1..16)) { rnd.rand(0x430..0x44f).chr(Encoding::UTF_8) }.join}"
+    assert_raises(Factbase::Syntax::Broken, "glued word in #{q.inspect} was ignored, seed #{seed}") do
+      Factbase::Syntax.new(q).to_term
+    end
+  end
+
+  def test_cannot_parse_term_followed_by_number
+    seed = Random.new_seed
+    q = "(eq x 1) #{Random.new(seed).rand(-1_000_000..1_000_000)}"
+    assert_raises(Factbase::Syntax::Broken, "trailing number in #{q.inspect} was ignored, seed #{seed}") do
+      Factbase::Syntax.new(q).to_term
+    end
+  end
+
+  def test_cannot_query_with_trailing_word
+    seed = Random.new_seed
+    rnd = Random.new(seed)
+    fb = Factbase.new
+    fb.insert.x = 1
+    q = "(eq x 1) #{Array.new(rnd.rand(1..16)) { [*'a'..'z'].sample(random: rnd) }.join}"
+    assert_raises(Factbase::Syntax::Broken, "query #{q.inspect} ran with its tail ignored, seed #{seed}") do
+      fb.query(q).each.to_a
+    end
+  end
+
+  def test_parses_term_followed_by_comment
+    seed = Random.new_seed
+    rnd = Random.new(seed)
+    q = "(eq x 1) # #{Array.new(rnd.rand(1..16)) { rnd.rand(0x430..0x44f).chr(Encoding::UTF_8) }.join}"
+    assert_equal('(eq x 1)', Factbase::Syntax.new(q).to_term.to_s, "comment in #{q.inspect} broke it, seed #{seed}")
+  end
+
   def test_simplification
     {
       '(foo)' => '(foo)',
@@ -197,5 +323,24 @@ class TestSyntax < Factbase::Test
       super
       @x = invalid
     end
+  end
+
+  def test_ends_a_comment_at_a_carriage_return
+    assert_equal('(eq x 1)', Factbase::Syntax.new("# comment\r(eq x 1)").to_term.to_s)
+  end
+
+  def test_refuses_float_literals_out_of_range
+    %w[1e9999 1e-9999 -2.5e-9999 1E9999].each do |t|
+      assert_includes(
+        assert_raises(Factbase::Syntax::Broken) { Factbase::Syntax.new("(eq x #{t})").to_term }.message,
+        'out of range'
+      )
+    end
+    assert_equal('(eq x 0.0)', Factbase::Syntax.new('(eq x 0.0e-9999)').to_term.to_s)
+  end
+
+  def test_parses_a_string_that_ends_in_an_escaped_backslash
+    assert_equal('tail\\', Factbase::Syntax.new('(eq x "tail\\\\")').to_term.operands[1])
+    assert_equal("x'y", Factbase::Syntax.new("(eq x 'x\\'y')").to_term.operands[1])
   end
 end
