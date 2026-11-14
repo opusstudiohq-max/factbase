@@ -26,6 +26,13 @@ class TestChurn < Factbase::Test
 
   def test_checks_for_zero
     assert_predicate(Factbase::Churn.new, :zero?)
+    refute_predicate(Factbase::Churn.new(1, 0, 1), :zero?)
+  end
+
+  def test_is_not_zero_with_a_single_counter
+    [[1, 0, 0], [0, 1, 0], [0, 0, 1]].each do |counts|
+      refute_predicate(Factbase::Churn.new(*counts), :zero?, "churn #{counts.inspect} is counted as zero")
+    end
   end
 
   def test_makes_a_duplicate
@@ -38,5 +45,18 @@ class TestChurn < Factbase::Test
     c2 = Factbase::Churn.new
     c2.append(3, 2, 46)
     assert_equal('4i/8d/49a', (c1 + c2).to_s)
+  end
+
+  def test_reads_the_counters_under_the_lock_of_append
+    churn = Factbase::Churn.new
+    churn.append(1, 1, 1)
+    %i[inserted deleted added to_i to_s zero?].each do |reader|
+      churn.instance_variable_get(:@mutex).synchronize do
+        t = Thread.new { churn.public_send(reader) }
+        sleep(0.05)
+        assert_predicate(t, :alive?, "#{reader} read the counters without the lock")
+        t.kill
+      end
+    end
   end
 end

@@ -14,12 +14,13 @@ module Factbase::CachedTerm
   # Does it match the fact?
   # @param [Factbase::Fact] fact The fact
   # @param [Array<Factbase::Fact>] maps All maps available
+  # @param [Factbase] fb Factbase to use for sub-queries
   # @return [bool] TRUE if matches
   def evaluate(fact, maps, fb)
     return super unless static? && !abstract?
     return super if %i[head unique].include?(@op)
     key = [maps.object_id, to_s]
-    @cache[key] = super if @cache[key].nil?
+    @cache[key] = super unless @cache.key?(key)
     @cache[key]
   end
 end

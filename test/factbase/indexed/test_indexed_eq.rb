@@ -1,5 +1,8 @@
 # frozen_string_literal: true
 
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026 Yegor Bugayenko
+# SPDX-License-Identifier: MIT
+
 require_relative '../../../lib/factbase'
 require_relative '../../../lib/factbase/indexed/indexed_eq'
 require_relative '../../../lib/factbase/indexed/indexed_factbase'
@@ -7,8 +10,6 @@ require_relative '../../../lib/factbase/indexed/indexed_term'
 require_relative '../../../lib/factbase/lazy_taped'
 require_relative '../../../lib/factbase/taped'
 require_relative '../../../lib/factbase/term'
-# SPDX-FileCopyrightText: Copyright (c) 2024-2026 Yegor Bugayenko
-# SPDX-License-Identifier: MIT
 
 require_relative '../../test__helper'
 
@@ -75,6 +76,52 @@ class TestIndexedEq < Factbase::Test
       Factbase.new(maps.map(&:dup)).query('(eq a 2)').each.to_a.size,
       Factbase::IndexedFactbase.new(Factbase.new(maps.map(&:dup))).query('(eq a 2)').each.to_a.size,
       'a fact that stores the same value twice must be returned once, as it is without the index'
+    )
+  end
+
+  def test_matches_integer_fact_when_query_uses_equal_float
+    origin = Factbase.new
+    origin.insert.amount = 1
+    query = '(eq amount 1.0)'
+    assert_equal([1], origin.query(query).each.to_a.map(&:amount))
+    assert_equal([1], Factbase::IndexedFactbase.new(origin).query(query).each.to_a.map(&:amount))
+  end
+
+  def test_answers_like_the_plain_factbase_after_a_scoped_query
+    plain = Factbase.new
+    indexed = Factbase::IndexedFactbase.new(Factbase.new)
+    [plain, indexed].each do |fb|
+      4.times do |i|
+        f = fb.insert
+        f.z = 7
+        f.w = i.even? ? 1 : 2
+      end
+      fb.insert.x = 0
+    end
+    assert_equal(
+      2,
+      indexed.query('(eq z 7)', indexed.to_enum(:each).to_a[2..]).each.to_a.size,
+      'the scoped query must find the two facts with z in the scope'
+    )
+    assert_equal(4, plain.query('(eq z 7)').each.to_a.size, 'the plain factbase must find every fact with z')
+    assert_equal(
+      plain.query('(eq z 7)').each.map { |f| f['z'] },
+      indexed.query('(eq z 7)').each.map { |f| f['z'] },
+      'the scoped query must not poison the index of the next full query'
+    )
+  end
+
+  def test_keeps_the_order_of_facts_for_a_multi_valued_parameter
+    plain = Factbase.new
+    indexed = Factbase::IndexedFactbase.new(Factbase.new)
+    [plain, indexed].each do |fb|
+      fb.insert.rank = 2
+      fb.insert.rank = 1
+    end
+    params = { 'ranks' => [1, 2] }
+    assert_equal(
+      plain.query('(eq rank $ranks)').each(plain, params).map(&:rank),
+      indexed.query('(eq rank $ranks)').each(indexed, params).map(&:rank)
     )
   end
 end

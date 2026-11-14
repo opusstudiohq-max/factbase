@@ -27,10 +27,17 @@ class Factbase::Join < Factbase::TermBase
     jumps =
       jumps.split(',')
         .map(&:strip)
-        .map! { |j| j.split('<=').map(&:strip) }
+        .map! do |j|
+          pieces = j.split('<=', -1).map(&:strip)
+          raise(ArgumentError, "A join mapping can contain at most one '<=': '#{j}'") if pieces.size > 2
+          raise(ArgumentError, "A join mapping can't have an empty side: '#{j}'") if pieces.any?(&:empty?)
+          pieces
+        end
         .map! { |j| j.size == 1 ? [j[0], j[0]] : j }
     term = @operands[1]
-    raise(ArgumentError, "A term is expected, but '#{term}' provided") unless term.is_a?(Factbase::Term)
+    unless term.is_a?(Factbase::Term) || term.is_a?(Factbase::TermBase)
+      raise(ArgumentError, "A term is expected, but '#{term}' provided")
+    end
     subset = fb.query(term, maps).each(fb, fact).to_a
     subset.each do |s|
       jumps.each do |to, from|

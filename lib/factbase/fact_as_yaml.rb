@@ -13,7 +13,8 @@ require_relative '../factbase'
 #
 #  require 'factbase/fact_as_yaml'
 #  fb = Factbase.new
-#  f = fb.query('(eq foo 42)').to_a.first
+#  fb.insert.foo = 42
+#  f = fb.query('(eq foo 42)').each.to_a.first
 #  puts Factbase::FactAsYaml.new(f).to_s
 #
 # Author:: Yegor Bugayenko (yegor256@gmail.com)
@@ -36,9 +37,9 @@ class Factbase::FactAsYaml
     end
     hash.sort.to_h.map do |k, vv|
       [
-        k,
+        key(k),
         ': ',
-        if vv.one?
+        if vv.size == 1
           v_to_s(vv.first)
         else
           [
@@ -53,10 +54,26 @@ class Factbase::FactAsYaml
 
   private
 
+  # A property name YAML would read as a boolean or null, like +yes+ or +null+, gets quoted.
+  def key(name)
+    YAML.safe_load(name).is_a?(String) ? name : "'#{name}'"
+  end
+
   def v_to_s(val)
     s = val
-    s = s.inspect.ellipsized if s.is_a?(String)
-    s = s.utc.iso8601 if s.is_a?(Time)
+    s = unicode(s).ellipsized.inspect if s.is_a?(String)
+    s = s.getutc.iso8601(9) if s.is_a?(Time)
     s
+  end
+
+  # Convert a string to UTF-8, since YAML can't print one in another encoding;
+  # keep its bytes as binary when they can't be transcoded.
+  # @param [String] val The value
+  # @return [String] The value in UTF-8, or as binary
+  def unicode(val)
+    return val if val.encoding == Encoding::UTF_8
+    val.encode(Encoding::UTF_8)
+  rescue EncodingError
+    val.b
   end
 end

@@ -1,12 +1,13 @@
 # frozen_string_literal: true
 
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026 Yegor Bugayenko
+# SPDX-License-Identifier: MIT
+
 require_relative '../../../lib/factbase/term'
 require_relative '../../../lib/factbase/terms/always'
 require_relative '../../../lib/factbase/terms/never'
 require_relative '../../../lib/factbase/terms/or'
 require_relative '../../../lib/factbase/terms/simplified'
-# SPDX-FileCopyrightText: Copyright (c) 2024-2026 Yegor Bugayenko
-# SPDX-License-Identifier: MIT
 
 require_relative '../../test__helper'
 
@@ -15,6 +16,22 @@ require_relative '../../test__helper'
 # Copyright:: Copyright (c) 2024-2026 Yegor Bugayenko
 # License:: MIT
 class TestSimplified < Factbase::Test
+  def test_keeps_repeated_conditional_writes
+    fb = Factbase.new
+    fb.insert.x = 1
+    assert_equal(
+      [[1, 1]],
+      fb.query('(and (when (always) (as y 1)) (when (always) (as y 1)))').each.map { |fact| fact['y'] }
+    )
+  end
+
+  def test_keeps_writes_inside_nested_conditions
+    fb = Factbase.new
+    fb.insert.x = 1
+    operand = '(when (always) (when (always) (as y 1)))'
+    assert_equal([[1, 1]], fb.query("(and #{operand} #{operand})").each.map { |fact| fact['y'] })
+  end
+
   def test_unique_operands_simple
     assert_equal(1, Factbase::Simplified.new([Factbase::Or.new([]), Factbase::Or.new([])]).unique.size)
   end
@@ -29,5 +46,11 @@ class TestSimplified < Factbase::Test
         ]
       ).unique.size
     )
+  end
+
+  def test_keeps_a_repeated_as
+    fb = Factbase.new
+    fb.insert.x = 1
+    assert_equal([[1, 1]], fb.query('(and (as y x) (as y x))').each.map { |f| f['y'] })
   end
 end

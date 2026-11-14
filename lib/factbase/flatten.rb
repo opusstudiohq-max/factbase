@@ -21,7 +21,7 @@ class Factbase::Flatten
   # @return [Array<HashMap>] The hashmaps, but improved
   def it
     @maps
-      .sort_by { |m| Array(m[@sorter]).map { |v| Factbase::Flatten.key(v) } }
+      .sort_by.with_index { |m, i| [Array(m[@sorter]).map { |v| Factbase::Flatten.key(v) }, i] }
       .map { |m| m.sort.to_h }
       .map! { |m| m.transform_values { |v| v.size == 1 ? v[0] : v } }
   end
@@ -38,7 +38,7 @@ class Factbase::Flatten
     when Numeric
       [0, value, '']
     when Time
-      [1, Float(value), '']
+      [1, Rational(value), '']
     else
       [2, 0, value.to_s]
     end

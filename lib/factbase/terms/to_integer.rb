@@ -22,15 +22,18 @@ class Factbase::ToInteger < Factbase::TermBase
   def evaluate(fact, maps, fb)
     assert_args(1)
     vv = _values(0, fact, maps, fb)
-    return if vv.nil?
+    return if vv.nil? || vv.empty? || vv[0].nil?
     to_integer(vv[0])
   end
 
   private
 
   def to_integer(value)
+    return 1 if value == true
+    return 0 if value == false
+    return Integer(value, 10) if value.is_a?(String)
     Integer(value)
-  rescue ArgumentError, TypeError => e
+  rescue ArgumentError, TypeError, FloatDomainError => e
     raise(RuntimeError, "Cannot convert '#{value}' to Integer in (to_integer ...): #{e.message}")
   end
 end

@@ -21,7 +21,8 @@ class Factbase::LazyTaped
   end
 
   # Returns the original map this copy was derived from.
-  # Returns nil if the base hasn't been copied yet or if the fact is new.
+  # Returns nil if the base hasn't been copied yet, and the map itself
+  # if it was inserted in the transaction.
   def source_of(copy)
     return unless @copied
     @sources[copy]
@@ -65,6 +66,14 @@ class Factbase::LazyTaped
     copied? ? @staged.empty? : (@origin.empty? && @staged.empty?)
   end
 
+  def [](pos)
+    return @staged[pos] if copied?
+    pos += size if pos.negative?
+    return if pos.negative?
+    return @origin[pos] if pos < @origin.size
+    @staged[pos - @origin.size]
+  end
+
   def <<(map)
     @staged << map
     _track(map, map)
@@ -81,7 +90,14 @@ class Factbase::LazyTaped
         yielded_size += 1
       end
     end
-    staged = is_copied == copied? ? @staged : @staged[yielded_size..]
+    staged =
+      if is_copied
+        @staged.dup
+      elsif copied?
+        @staged[yielded_size..]
+      else
+        @staged
+      end
     staged&.each do |f|
       next if f.nil?
       yield(_tape(f))

@@ -1,10 +1,11 @@
 # frozen_string_literal: true
 
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026 Yegor Bugayenko
+# SPDX-License-Identifier: MIT
+
 require_relative '../../../lib/factbase/syntax'
 require_relative '../../../lib/factbase/term'
 require_relative '../../../lib/factbase/terms/sorted'
-# SPDX-FileCopyrightText: Copyright (c) 2024-2026 Yegor Bugayenko
-# SPDX-License-Identifier: MIT
 
 require_relative '../../test__helper'
 
@@ -32,6 +33,20 @@ class TestSorted < Factbase::Test
       ], Factbase.new, {}
     )
     assert_equal('first third nothing', list.map { |m| m['y'].first }.join(' '))
+  end
+
+  def test_keeps_insertion_order_of_equal_values
+    list = Factbase::Syntax.new('(sorted k (always))').to_term.predict(
+      Array.new(17) { |i| { 'id' => [i], 'k' => [i % 2] } }, Factbase.new, {}
+    )
+    assert_equal([*0.step(16, 2), *1.step(15, 2)], list.map { |m| m['id'].first })
+  end
+
+  def test_sorts_values_of_different_types
+    list = Factbase::Syntax.new('(sorted score (always))').to_term.predict(
+      [{ 'score' => ['two'] }, { 'score' => [1] }], Factbase.new, {}
+    )
+    assert_equal([1, 'two'], list.map { |m| m['score'].first })
   end
 
   def test_does_not_turn_a_param_into_a_property

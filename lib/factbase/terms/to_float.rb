@@ -22,13 +22,14 @@ class Factbase::ToFloat < Factbase::TermBase
   def evaluate(fact, maps, fb)
     assert_args(1)
     vv = _values(0, fact, maps, fb)
-    return if vv.nil?
+    return if vv.nil? || vv.empty? || vv[0].nil?
     to_float(vv[0])
   end
 
   private
 
   def to_float(value)
+    return Float(value) if value.is_a?(Time)
     Float(value.to_s)
   rescue ArgumentError, TypeError => e
     raise(RuntimeError, "Cannot convert '#{value}' to Float in (to_float ...): #{e.message}")

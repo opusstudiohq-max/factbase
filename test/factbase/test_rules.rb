@@ -32,6 +32,26 @@ class TestRules < Factbase::Test
     end
   end
 
+  def test_refuses_fact_without_uid_that_breaks_rule
+    fb = Factbase::Rules.new(Factbase.new, '(exists name)', uid: '_id')
+    assert_raises(ArgumentError) do
+      fb.txn do |fbt|
+        fbt.insert.bar = 1
+      end
+    end
+    assert_equal(0, fb.size)
+  end
+
+  def test_commits_fact_with_uid_and_rule_property
+    fb = Factbase::Rules.new(Factbase.new, '(exists name)', uid: '_id')
+    fb.txn do |fbt|
+      f = fbt.insert
+      f._id = 1
+      f.name = 'test'
+    end
+    assert_equal(1, fb.size)
+  end
+
   def test_keeps_checking_after_a_rollback
     fb = Factbase::Rules.new(Factbase.new, '(exists foo)')
     fb.txn do |fbt|
@@ -96,6 +116,17 @@ class TestRules < Factbase::Test
     assert_equal(0, fb.size)
   end
 
+  def test_checks_rules_when_txn_throws_commit
+    fb = Factbase::Rules.new(Factbase.new, '(exists foo)')
+    assert_raises(ArgumentError) do
+      fb.txn do |fbt|
+        fbt.insert.bar = 1
+        throw(:commit)
+      end
+    end
+    assert_equal(0, fb.size)
+  end
+
   def test_defends_against_id_duplicates
     fb = Factbase::Rules.new(Factbase.new, '(always)', uid: 'id')
     assert_raises(StandardError) do
@@ -123,6 +154,20 @@ class TestRules < Factbase::Test
     end
   end
 
+  def test_defends_against_id_duplicates_after_a_deletion
+    base = Factbase.new
+    base.insert.then do |f|
+      f.id = 1
+      f.id = 2
+    end
+    base.insert.id = 3
+    rules = Factbase::Rules.new(base, '(always)', uid: 'id')
+    assert_raises(ArgumentError) do
+      rules.txn { |tx| tx.query('(eq id 3)').delete! }
+    end
+    assert_equal(2, base.size)
+  end
+
   def test_in_combination_with_pre
     fb = Factbase::Rules.new(Factbase.new, '(when (exists a) (exists b))')
     fb =
@@ -139,7 +184,7 @@ class TestRules < Factbase::Test
       end
     end
     assert(ok)
-    assert_equal(0, fb.query('(eq hello $v)').each(v: 42).to_a.size)
+    assert_equal(0, fb.query('(eq hello $v)').each(fb, 'v' => [42]).to_a.size)
   end
 
   def test_error_message_includes_expression
@@ -150,6 +195,62 @@ class TestRules < Factbase::Test
       end
     assert_includes(ex.message, '(exists foo)', 'Error message should include the rule expression')
     refute_includes(ex.message, 'nil', 'Error message should not contain "nil"')
+  end
+
+  def test_keeps_uid_tracking_after_a_nested_transaction_is_refused
+    base = Factbase.new
+    rules = Factbase::Rules.new(base, '(exists foo)', uid: 'id')
+    assert_raises(ArgumentError) do
+      rules.txn do |tx|
+        valid = tx.insert
+        valid.id = 1
+        valid.foo = 1
+        assert_raises(StandardError) { tx.txn { flunk('nested transaction entered') } }
+        invalid = tx.insert
+        invalid.id = 2
+        invalid.bar = 1
+      end
+    end
+    assert_equal(0, base.size)
+    assert_raises(ArgumentError) { rules.insert.bar = 1 }
+  end
+
+  def test_rejects_a_deletion_that_leaves_a_dangling_reference
+    rule = '(when (exists parent) (gt (agg (eq id $parent) (count)) 0))'
+    [nil, 'id'].each do |uid|
+      base = Factbase.new
+      base.insert.id = 1
+      child = base.insert
+      child.id = 2
+      child.parent = 1
+      rules = Factbase::Rules.new(base, rule, uid: uid)
+      assert_raises(ArgumentError, "uid=#{uid.inspect}") do
+        rules.txn { |tx| tx.query('(eq id 1)').delete! }
+      end
+      assert_equal([1, 2], base.query('(always)').each.map(&:id), "uid=#{uid.inspect}")
+    end
+  end
+
+  def test_rejects_a_deletion_that_breaks_a_count_rule
+    [nil, 'id'].each do |uid|
+      base = Factbase.new
+      base.insert.id = 1
+      base.insert.id = 2
+      rules = Factbase::Rules.new(base, '(gte (agg (always) (count)) 2)', uid: uid)
+      assert_raises(ArgumentError, "uid=#{uid.inspect}") do
+        rules.txn { |tx| tx.query('(eq id 1)').delete! }
+      end
+      assert_equal([1, 2], base.query('(always)').each.map(&:id), "uid=#{uid.inspect}")
+    end
+  end
+
+  def test_commits_a_deletion_with_uid_when_the_rule_still_holds
+    base = Factbase.new
+    base.insert.id = 1
+    base.insert.id = 2
+    rules = Factbase::Rules.new(base, '(exists id)', uid: 'id')
+    rules.txn { |tx| tx.query('(eq id 1)').delete! }
+    assert_equal([2], base.query('(always)').each.map(&:id))
   end
 
   def test_does_not_write_a_value_rejected_by_a_rule
@@ -168,5 +269,82 @@ class TestRules < Factbase::Test
       '...',
       'Error message should truncate long expressions'
     )
+  end
+
+  def test_error_message_does_not_truncate_expression_of_32_characters
+    rule = '(exists averylongattributenamex)'
+    assert_equal(32, rule.length)
+    f = Factbase::Rules.new(Factbase.new, rule).insert
+    message = assert_raises(StandardError) { f.bar = 42 }.message
+    assert_includes(message, rule, 'Error message should contain the whole rule expression')
+    refute_includes(message, '...', 'Error message should not truncate an expression of 32 characters')
+  end
+
+  def test_error_message_does_not_name_the_failed_term_for_a_non_conjunction
+    f = Factbase::Rules.new(Factbase.new, '(exists foo)').insert
+    message = assert_raises(StandardError) { f.bar = 42 }.message
+    assert(
+      message.start_with?('The fact doesn\'t match the "(exists foo)" rule'),
+      "Error message should not name the failed term for a non-conjunction: #{message}"
+    )
+  end
+
+  def test_error_message_names_failed_part_of_long_conjunction
+    f = Factbase::Rules.new(
+      Factbase.new,
+      <<~RULE
+        (and
+          # The rule is intentionally long enough that its beginning is not useful.
+          # This is how a rule read from a file normally begins.
+          (always)
+          (always)
+          (always)
+          (exists foo)
+        )
+      RULE
+    ).insert
+    message = assert_raises(StandardError) { f.bar = 42 }.message
+    assert_includes(message, '(exists foo)', 'Error message should name the failed term')
+    refute_includes(message, 'intentionally long enough', 'Error message should not name the header')
+  end
+
+  def test_refuses_to_import_a_fact_that_breaks_the_rule
+    source = Factbase.new
+    source.insert.bar = 1
+    fb = Factbase::Rules.new(Factbase.new, '(exists foo)')
+    assert_raises(ArgumentError) { fb.import(source.export) }
+    assert_equal(0, fb.size)
+    good = Factbase.new
+    good.insert.foo = 1
+    fb.import(good.export)
+    assert_equal(1, fb.size)
+  end
+
+  def test_checks_a_txn_against_the_pending_factbase
+    fb = Factbase.new
+    fb.insert.v = 1
+    fb.query('(defn rules_within_limit "fb.size <= 1")').each.to_a
+    assert_raises(ArgumentError) do
+      Factbase::Rules.new(fb, '(rules_within_limit)').txn { |fbt| fbt.insert.v = 2 }
+    end
+    assert_equal(1, fb.size)
+  ensure
+    Factbase.new.query('(undef rules_within_limit)').each.to_a
+  end
+
+  def test_checks_through_to_a_and_map_as_well
+    fb = Factbase::Rules.new(Factbase.new, '(when (exists first) (exists second))')
+    fb.insert.foo = 42
+    assert_raises(StandardError) { fb.query('(always)').to_a.first.first = 1 }
+    assert_raises(StandardError) { fb.query('(always)').map { |f| f.first = 1 } }
+    assert_raises(StandardError) { fb.query('(always)').first.first = 1 }
+    assert_raises(StandardError) { fb.query('(always)').take(1).first.first = 1 }
+  end
+
+  def test_checks_through_find_and_detect
+    fb = Factbase::Rules.new(Factbase.new, '(when (exists first) (exists second))')
+    fb.insert.foo = 42
+    assert_raises(StandardError) { fb.query('(always)').find { |f| f.first = 100 } }
+    assert_raises(StandardError) { fb.query('(always)').detect { |f| f.first = 200 } }
   end
 end

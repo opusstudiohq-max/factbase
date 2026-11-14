@@ -56,6 +56,26 @@ class TestAccum < Factbase::Test
     assert_equal(2, a['foo'].size)
   end
 
+  def test_keeps_insertion_order_in_both_modes
+    [true, false].each do |pass|
+      f = Factbase.new.insert
+      f.foo = 1
+      a = Factbase::Accum.new(f, {}, pass)
+      a.foo = 2
+      a.foo = 3
+      assert_equal([1, 2, 3], a['foo'], "wrong order when pass=#{pass}")
+      assert_equal(2, a.foo, "wrong getter value when pass=#{pass}")
+    end
+  end
+
+  def test_getter_answers_first_of_two_values_written_by_as
+    fb = Factbase.new
+    fb.insert.x = 1
+    f = fb.query('(and (as foo 1) (as foo 2))').each.first
+    assert_equal(1, f.foo, 'getter must answer the first value written by "as"')
+    assert_equal([1, 2], f['foo'], 'both values written by "as" must be kept')
+  end
+
   def test_empties
     assert_nil(Factbase::Accum.new(Factbase::Fact.new({}), {}, false)['foo'])
   end
@@ -83,5 +103,15 @@ class TestAccum < Factbase::Test
     assert_includes(a.all_properties, 'x')
     assert_includes(a.all_properties, 'y')
     assert_includes(a.all_properties, 'z')
+  end
+
+  def test_forgets_a_value_the_fact_rejected
+    fb = Factbase.new
+    fb.insert.foo = 1
+    result = fb.query('(exists foo)').each.first
+    assert_raises(ArgumentError) { result.foo = nil }
+    result.foo = 2
+    assert_equal(2, result.foo)
+    assert_equal([1, 2], result['foo'])
   end
 end

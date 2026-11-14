@@ -3,6 +3,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026 Yegor Bugayenko
 # SPDX-License-Identifier: MIT
 
+require 'English'
 require 'json'
 require 'yaml'
 
@@ -41,7 +42,7 @@ require 'yaml'
 #  }
 #
 # Value sets, as you can see, allow data of different types. However, there
-# are only four types are allowed: Integer, Float, String, and Time.
+# are six allowed types: Integer, Float, String, Time, TrueClass, and FalseClass.
 #
 # A factbase may be exported to a file and then imported back:
 #
@@ -88,8 +89,10 @@ class Factbase
 
   # Constructor.
   # @param [Array<Hash>] maps Array of facts to start with
+  # Symbol property keys are converted to Strings in copies of their maps.
+  # Maps that already use String keys retain their original identity.
   def initialize(maps = [])
-    @maps = maps
+    @maps = normalize(maps)
   end
 
   # Size, the total number of facts in the factbase.
@@ -102,7 +105,9 @@ class Factbase
   # @yieldparam [Hash] fact Each fact as a plain Hash
   # @return [Integer, Enumerator] Total number of facts or Enumerator
   def each(&)
+    return to_enum(__method__) unless block_given?
     @maps.each(&)
+    @maps.size
   end
 
   # Insert a new fact and return it.
@@ -137,8 +142,12 @@ class Factbase
   # @param [String|Factbase::Term] term The query to use for selections
   # @param [Array<Hash>|nil] maps The subset of maps (if provided)
   def query(term, maps = nil)
-    maps ||= @maps
     term = to_term(term) if term.is_a?(String)
+    require_relative('factbase/term') unless defined?(Factbase::Term)
+    unless term.is_a?(Factbase::Term)
+      raise(ArgumentError, "A query must be a String or a Factbase::Term, while #{term.class} provided")
+    end
+    maps ||= @maps
     require_relative('factbase/query')
     Factbase::Query.new(maps, term, self)
   end
@@ -172,6 +181,7 @@ class Factbase
     taped = Factbase::LazyTaped.new(@maps)
     require_relative('factbase/churn')
     churn = Factbase::Churn.new
+    done = false
     catch(:commit) do
       require_relative('factbase/light')
       commit = false
@@ -179,10 +189,13 @@ class Factbase
         yield(Factbase::Light.new(Factbase.new(taped)))
         commit = true
       end
+      done = true
       return churn unless commit
     rescue Factbase::Rollback
+      done = true
       return churn
     end
+    done = true
     seen = {}.compare_by_identity
     garbage = {}.compare_by_identity
     taped.deleted.each do |oid|
@@ -222,6 +235,8 @@ class Factbase
     end
     @maps.delete_if { |m| garbage.key?(m) } unless garbage.empty?
     churn
+  ensure
+    raise(RuntimeError, 'The txn block was left by break or return, its changes are lost') unless done || $ERROR_INFO
   end
 
   # Export it into a chain of bytes.
@@ -264,13 +279,38 @@ class Factbase
   #
   # @param [String] bytes Binary string to import
   def import(bytes)
+    raise(StandardError, 'The input is nil, cannot load a factbase') if bytes.nil?
     raise(StandardError, 'Empty input, cannot load a factbase') if bytes.empty?
     begin
       data = Marshal.load(bytes)
       data = Marshal.load(data[:maps]) if data.is_a?(Hash) && data.key?(:maps)
-    rescue TypeError, ArgumentError => e
+    rescue TypeError, ArgumentError, RegexpError => e
       raise(StandardError, "The input is not a valid factbase: #{e.message}")
     end
-    @maps += data
+    unless data.is_a?(Array) && data.all?(Hash)
+      raise(StandardError, 'The input is not a valid factbase: expected an array of maps')
+    end
+    @maps.concat(normalize(data))
+  end
+
+  private
+
+  # Normalize Symbol property keys without changing the caller's maps.
+  # @param [Array<Hash>, Object] maps Maps or a transaction collection
+  # @return [Array<Hash>, Object] Maps with String property names
+  def normalize(maps)
+    return maps unless maps.is_a?(Array)
+    symbolic = ->(map) { map.is_a?(Hash) && map.keys.any?(Symbol) }
+    return maps unless maps.any?(&symbolic)
+    maps.map do |map|
+      next map unless symbolic.call(map)
+      map.each_with_object({}) do |(key, values), normalized|
+        name = key.is_a?(Symbol) ? key.to_s : key
+        if normalized.key?(name)
+          raise(ArgumentError, "The map has a duplicate property #{name.inspect} after normalizing Symbol keys")
+        end
+        normalized[name] = values
+      end
+    end
   end
 end

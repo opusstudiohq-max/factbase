@@ -9,6 +9,26 @@ require_relative 'lazy_taped_array'
 class Factbase::LazyTaped
   # Decorator of Hash that triggers copy-on-write.
   class LazyTapedHash
+    MUTATING_METHODS = %i[
+      clear
+      compare_by_identity
+      delete
+      delete_if
+      filter!
+      keep_if
+      merge!
+      rehash
+      reject!
+      replace
+      select!
+      shift
+      store
+      transform_keys!
+      transform_values!
+      update
+    ].freeze
+    private_constant :MUTATING_METHODS
+
     # Creates a new LazyTapedHash decorator.
     # @param origin [Hash] The original hash being wrapped (not yet copied)
     # @param lazy_taped [Factbase::LazyTaped] The parent LazyTaped instance that manages copy-on-write
@@ -24,8 +44,24 @@ class Factbase::LazyTaped
       current_map.keys
     end
 
-    def map(&)
-      current_map.map(&)
+    # Maps the pairs of the hash, giving the block copies of the property arrays.
+    # @return [Array, Enumerator] Results of the block
+    def map
+      return to_enum(:map) unless block_given?
+      current_map.map { |pair| yield([pair[0], detached(pair[1])]) }
+    end
+
+    # Returns the values of the hash, with copies of the property arrays.
+    # @return [Array] Values, so that changing an array does not touch the fact
+    def values
+      current_map.values.map { |value| detached(value) }
+    end
+
+    # Converts the hash to a plain one, with copies of the property arrays.
+    # @return [Hash] The hash, so that changing an array does not touch the fact
+    def to_h(&)
+      return current_map.to_h { |key, value| [key, detached(value)] } unless block_given?
+      current_map.to_h { |key, value| yield(key, detached(value)) }
     end
 
     def [](key)
@@ -60,13 +96,21 @@ class Factbase::LazyTaped
 
     private
 
+    def detached(value)
+      value.is_a?(Array) ? value.dup : value
+    end
+
     def current_map
+      ensure_copied_map if @lazy_taped.copied?
       @copied_map || @origin
     end
 
     def method_missing(method, *, &)
-      ensure_copied_map if method.to_s.end_with?('=', '!')
-      current_map.__send__(method, *, &)
+      mutating = method.to_s.end_with?('=', '!') || MUTATING_METHODS.include?(method)
+      ensure_copied_map if mutating
+      current_map.__send__(method, *, &).tap do
+        @added.append(@copied_map.object_id) if mutating
+      end
     end
 
     def respond_to_missing?(method, include_private = false)

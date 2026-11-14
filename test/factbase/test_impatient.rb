@@ -1,11 +1,12 @@
 # frozen_string_literal: true
 
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026 Yegor Bugayenko
+# SPDX-License-Identifier: MIT
+
 require 'benchmark'
 require_relative '../../lib/factbase'
 require_relative '../../lib/factbase/impatient'
 require_relative '../../lib/factbase/query'
-# SPDX-FileCopyrightText: Copyright (c) 2024-2026 Yegor Bugayenko
-# SPDX-License-Identifier: MIT
 
 require_relative '../test__helper'
 
@@ -34,6 +35,24 @@ class TestImpatient < Factbase::Test
       def delete!(fb = @fb)
         sleep(0.2)
         super
+      end
+    end
+
+    def query(term, maps = nil)
+      maps ||= @maps
+      term = to_term(term) if term.is_a?(String)
+      SlowQuery.new(maps, term, self)
+    end
+  end
+
+  class SlowStepsFactbase < Factbase
+    class SlowQuery < Factbase::Query
+      def each(fb = @fb, params = {})
+        return to_enum(__method__, fb, params) unless block_given?
+        super do |f|
+          sleep(0.03)
+          yield(f)
+        end
       end
     end
 
@@ -154,10 +173,36 @@ class TestImpatient < Factbase::Test
     assert_equal(100, count)
   end
 
+  def test_each_stops_when_the_caller_breaks
+    fb = Factbase::Impatient.new(Factbase.new, timeout: 5)
+    [1, 2, 3, 0, 4].each { |v| fb.insert.foo = v }
+    seen = []
+    fb.query('(and (gt foo -100) (eq (div 6 foo) (div 6 foo)))').each do |f|
+      seen << f.foo
+      break if seen.size == 2
+    end
+    assert_equal([1, 2], seen)
+  end
+
   def test_each_does_not_time_out_consumer
     fb = Factbase::Impatient.new(Factbase.new, timeout: 0.01)
     fb.insert
     assert_equal(1, fb.query('(always)').each { sleep(0.02) })
+  end
+
+  def test_spends_the_budget_even_when_the_wall_clock_goes_back
+    slow = SlowStepsFactbase.new
+    5.times { slow.insert.x = 1 }
+    fb = Factbase::Impatient.new(slow, timeout: 0.05)
+    shift = 0
+    Time.singleton_class.alias_method(:real_now, :now)
+    Time.define_singleton_method(:now) { real_now - (shift += 100) }
+    begin
+      assert_match(/timed out|out of time/, assert_raises(StandardError) { fb.query('(always)').each.to_a }.message)
+    ensure
+      Time.singleton_class.alias_method(:now, :real_now)
+      Time.singleton_class.remove_method(:real_now)
+    end
   end
 
   def test_custom_timeout
@@ -170,6 +215,13 @@ class TestImpatient < Factbase::Test
     )
   end
 
+  def test_refuses_an_infinite_timeout
+    assert_includes(
+      assert_raises(ArgumentError) { Factbase::Impatient.new(Factbase.new, timeout: Float::INFINITY) }.message,
+      'must be finite'
+    )
+  end
+
   def test_nil_factbase_raises
     assert_equal(
       'The "fb" is nil',
@@ -177,5 +229,18 @@ class TestImpatient < Factbase::Test
         Factbase::Impatient.new(nil)
       end.message
     )
+  end
+
+  def test_lets_stop_iteration_from_the_block_through
+    fb = Factbase::Impatient.new(Factbase.new)
+    3.times { fb.insert.x = 1 }
+    seen = 0
+    assert_raises(StopIteration) do
+      fb.query('(always)').each do |_f|
+        seen += 1
+        raise(StopIteration) if seen == 2
+      end
+    end
+    assert_equal(2, seen)
   end
 end

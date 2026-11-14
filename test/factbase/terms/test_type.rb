@@ -1,9 +1,10 @@
 # frozen_string_literal: true
 
-require_relative '../../../lib/factbase/term'
-require_relative '../../../lib/factbase/terms/type'
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026 Yegor Bugayenko
 # SPDX-License-Identifier: MIT
+
+require_relative '../../../lib/factbase/term'
+require_relative '../../../lib/factbase/terms/type'
 
 require_relative '../../test__helper'
 
@@ -20,5 +21,7 @@ class TestType < Factbase::Test
     assert_equal('String', t.evaluate(fact('foo' => 'bar'), [], Factbase.new))
     assert_equal('Float', t.evaluate(fact('foo' => 2.1), [], Factbase.new))
     assert_equal('Time', t.evaluate(fact('foo' => Time.now), [], Factbase.new))
+    assert_equal('Boolean', t.evaluate(fact('foo' => true), [], Factbase.new))
+    assert_equal('Boolean', t.evaluate(fact('foo' => false), [], Factbase.new))
   end
 end

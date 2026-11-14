@@ -1,9 +1,10 @@
 # frozen_string_literal: true
 
-require_relative '../../../lib/factbase/term'
-require_relative '../../../lib/factbase/terms/when'
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026 Yegor Bugayenko
 # SPDX-License-Identifier: MIT
+
+require_relative '../../../lib/factbase/term'
+require_relative '../../../lib/factbase/terms/when'
 
 require_relative '../../test__helper'
 
@@ -31,6 +32,22 @@ class TestWhen < Factbase::Test
       [Factbase::Unique.new([:foo]), Factbase::Eq.new([:bar, 52]), 'unique foo then eq bar 52']
     ].each do |first, second, msg|
       refute(Factbase::When.new([first, second]).evaluate(fact({ 'foo' => 22, 'bar' => 42 }), [], Factbase.new), msg)
+    end
+  end
+
+  def test_reads_a_boolean_wrapped_in_an_array
+    fb = Factbase.new
+    f = fb.insert
+    f.id = 1
+    f.active = false
+    f = fb.insert
+    f.id = 2
+    f.active = true
+    {
+      '(when (either active (never)) (never))' => [1],
+      '(when (always) (either active (never)))' => [2]
+    }.each do |q, ids|
+      assert_equal(ids, fb.query(q).each.map { |x| x['id'].first }, q)
     end
   end
 

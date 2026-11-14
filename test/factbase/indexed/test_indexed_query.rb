@@ -1,10 +1,11 @@
 # frozen_string_literal: true
 
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026 Yegor Bugayenko
+# SPDX-License-Identifier: MIT
+
 require_relative '../../../lib/factbase'
 require_relative '../../../lib/factbase/cached/cached_factbase'
 require_relative '../../../lib/factbase/indexed/indexed_factbase'
-# SPDX-FileCopyrightText: Copyright (c) 2024-2026 Yegor Bugayenko
-# SPDX-License-Identifier: MIT
 
 require_relative '../../test__helper'
 
@@ -13,6 +14,23 @@ require_relative '../../test__helper'
 # Copyright:: Copyright (c) 2024-2026 Yegor Bugayenko
 # License:: MIT
 class TestIndexedQuery < Factbase::Test
+  def test_invalidates_indexes_after_partial_deletion_fails
+    base = Factbase.new
+    indexed = Factbase::IndexedFactbase.new(base)
+    [1, 2].each do |value|
+      fact = indexed.insert
+      fact.x = value
+      fact.keep = 1
+    end
+    assert_equal([1, 2], indexed.query('(exists keep)').map(&:x))
+    assert_raises(StandardError) { indexed.query('(assert "stop" (lt x 2))').delete! }
+    fact = indexed.insert
+    fact.x = 3
+    fact.keep = 1
+    assert_equal([2, 3], base.query('(exists keep)').map(&:x))
+    assert_equal([2, 3], indexed.query('(exists keep)').map(&:x))
+  end
+
   def test_converts_to_string
     fb = Factbase.new
     fb.insert.foo = 42
@@ -234,5 +252,13 @@ class TestIndexedQuery < Factbase::Test
     fb.insert.foo = 1
     fb.query('(eq foo 1)').delete!
     assert_equal(0, fb.query('(always)').each.to_a.size)
+  end
+
+  def test_returns_number_of_facts_yielded
+    fb = Factbase::IndexedFactbase.new(Factbase.new)
+    3.times { |i| fb.insert.x = i }
+    query = fb.query('(exists x)')
+    assert_equal(3, query.each { |f| f })
+    assert_equal(3, query.each { |f| f })
   end
 end

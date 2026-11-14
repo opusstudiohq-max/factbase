@@ -63,4 +63,23 @@ class TestFlatten < Factbase::Test
   def test_sorts_values_of_mixed_kinds
     assert_equal(3, Factbase::Flatten.new([{ 'x' => ['b'] }, { 'x' => [1] }, { 'x' => [Time.now] }], 'x').it.size)
   end
+
+  def test_sorts_times_that_differ_only_in_nanoseconds
+    late = Time.at(1_800_000_000, 20, :nanosecond)
+    early = Time.at(1_800_000_000, 10, :nanosecond)
+    assert_equal(
+      [early, late],
+      Factbase::Flatten.new([{ 'when' => [late] }, { 'when' => [early] }], 'when').it.map { |m| m['when'] }
+    )
+  end
+
+  def test_keeps_the_order_of_maps_with_equal_sorter_values
+    maps = (0..9).map { |n| { 'k' => [n.even? ? 'a' : 'b'], 'n' => [n] } }
+    assert_equal([0, 2, 4, 6, 8, 1, 3, 5, 7, 9], Factbase::Flatten.new(maps, 'k').it.map { |m| m['n'] })
+  end
+
+  def test_keeps_the_order_of_maps_without_sorter
+    maps = [{ 'n' => ['first'] }, { '_id' => [1], 'n' => ['second'] }, { 'n' => ['third'] }]
+    assert_equal(%w[first third second], Factbase::Flatten.new(maps).it.map { |m| m['n'] })
+  end
 end

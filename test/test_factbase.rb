@@ -34,6 +34,48 @@ class TestFactbase < Factbase::Test
     assert_equal([2, 3], maps[1]['bar'])
   end
 
+  def test_queries_symbol_keys_without_changing_the_initial_maps
+    map = { foo: [1] }.freeze
+    found = Factbase.new([map].freeze).query('(exists foo)').each.first
+    refute_nil(found)
+    assert_equal([1], found[:foo])
+    assert_equal([1], found['foo'])
+    assert_equal(%w[foo], found.all_properties)
+    assert_equal({ foo: [1] }, map)
+  end
+
+  def test_imports_symbol_keys_alongside_existing_facts
+    fb = Factbase.new
+    fb.insert.bar = 2
+    fb.import(Marshal.dump([{ foo: [1] }]))
+    assert_equal(2, fb.size)
+    assert_equal([1], fb.query('(eq foo 1)').each.first[:foo])
+    assert_equal([2], fb.query('(exists bar)').each.first['bar'])
+    fb.txn do |tx|
+      tx.query('(exists foo)').each { |fact| fact.foo = 3 }
+    end
+    assert_equal([1, 3], fb.query('(exists foo)').each.first['foo'])
+  end
+
+  def test_keeps_string_maps_when_other_maps_have_symbol_keys
+    plain = { 'bar' => [2] }
+    fb = Factbase.new([{ foo: [1] }, plain])
+    assert_equal([1], fb.query('(eq foo 1)').each.first['foo'])
+    assert_same(plain, fb.each.to_a.last)
+    fb.query('(exists bar)').each { |fact| fact.bar = 3 }
+    assert_equal([2, 3], plain['bar'])
+  end
+
+  def test_refuses_ambiguous_symbol_and_string_properties
+    map = { foo: [1], 'foo' => [2] }
+    assert_includes(assert_raises(ArgumentError) { Factbase.new([map]) }.message, 'duplicate property')
+    fb = Factbase.new
+    fb.insert.bar = 3
+    assert_raises(ArgumentError) { fb.import(Marshal.dump([map])) }
+    assert_equal(1, fb.size)
+    assert_equal({ foo: [1], 'foo' => [2] }, map)
+  end
+
   def test_query_many_times
     total = 5
     fb = Factbase::Fuzz.make(total)
@@ -44,6 +86,15 @@ class TestFactbase < Factbase::Test
 
   def test_converts_query_to_term
     assert_equal('(eq foo 42)', Factbase.new.to_term('(eq foo 42)').to_s)
+  end
+
+  def test_query_rejects_non_query_objects
+    [nil, 42].each do |invalid|
+      assert_includes(
+        assert_raises(ArgumentError) { Factbase.new.query(invalid) }.message,
+        "while #{invalid.class} provided"
+      )
+    end
   end
 
   def test_simple_setting
@@ -110,6 +161,13 @@ class TestFactbase < Factbase::Test
         end.message, 'cannot load a factbase'
       )
     end
+  end
+
+  def test_import_rejects_nil
+    assert_includes(
+      assert_raises(StandardError) { Factbase.new.import(nil) }.message,
+      'The input is nil, cannot load a factbase'
+    )
   end
 
   def test_empty_or_not
@@ -460,6 +518,16 @@ class TestFactbase < Factbase::Test
     end
   end
 
+  def test_complains_when_txn_is_left_by_break
+    fb = Factbase.new
+    assert_raises(RuntimeError) do
+      fb.txn do |fbt|
+        fbt.insert.foo = 1
+        break
+      end
+    end
+  end
+
   def test_commits_on_exit_by_throw
     fb = Factbase.new
     fb.txn do |fbt|
@@ -500,5 +568,83 @@ class TestFactbase < Factbase::Test
         end.message, 'The input is not a valid factbase'
       )
     end
+  end
+
+  def test_import_of_a_marshal_with_a_broken_regexp
+    ["\x04\b[\x06/\x06[\x00", "\x04\b[\x06/\x06(\x00"].each do |bytes|
+      assert_includes(
+        assert_raises(StandardError) do
+          Factbase.new.import(bytes.b)
+        end.message, 'The input is not a valid factbase'
+      )
+    end
+  end
+
+  def test_import_rejects_a_valid_marshal_with_the_wrong_shape
+    assert_includes(
+      assert_raises(StandardError) do
+        Factbase.new.import(Marshal.dump({ unexpected: true }))
+      end.message,
+      'The input is not a valid factbase'
+    )
+  end
+
+  def test_counts_facts_in_each
+    seed = Random.new_seed
+    rnd = Random.new(seed)
+    fb = Factbase.new
+    total = rnd.rand(1..50)
+    total.times { fb.insert.foo = rnd.rand(1000) }
+    assert_equal(total, fb.each { |m| m }, "each did not return the number of #{total} facts, seed #{seed}")
+  end
+
+  def test_counts_no_facts_in_each_of_empty_factbase
+    assert_equal(0, Factbase.new.each { |m| m }, 'each of an empty factbase did not return zero')
+  end
+
+  def test_counts_facts_in_each_inside_txn
+    seed = Random.new_seed
+    rnd = Random.new(seed)
+    fb = Factbase.new
+    total = rnd.rand(1..50)
+    total.times { fb.insert.foo = rnd.rand(1000) }
+    count = 0
+    fb.txn { |fbt| count = fbt.each { |m| m } }
+    assert_equal(total, count, "each inside txn did not return the number of #{total} facts, seed #{seed}")
+  end
+
+  def test_enumerates_facts_in_each_without_block
+    seed = Random.new_seed
+    rnd = Random.new(seed)
+    fb = Factbase.new
+    total = rnd.rand(1..50)
+    total.times { fb.insert.foo = rnd.rand(1000) }
+    assert_equal(total, fb.each.to_a.size, "each without block lost some of #{total} facts, seed #{seed}")
+  end
+
+  def test_counts_facts_left_after_delete_in_each_inside_txn
+    seed = Random.new_seed
+    rnd = Random.new(seed)
+    fb = Factbase.new
+    total = rnd.rand(2..50)
+    total.times { |i| fb.insert.foo = i }
+    count = 0
+    fb.txn do |fbt|
+      fbt.query("(eq foo #{rnd.rand(total)})").delete!
+      count = fbt.each { |m| m }
+    end
+    assert_equal(total - 1, count, "each inside txn counted a deleted fact among #{total}, seed #{seed}")
+  end
+
+  def test_import_is_visible_to_a_query_made_before_it
+    other = Factbase.new
+    other.insert.foo = 1
+    fb = Factbase.new
+    q = fb.query('(always)')
+    fb.insert.bar = 2
+    assert_equal(1, q.each.to_a.size)
+    fb.import(other.export)
+    assert_equal(2, q.each.to_a.size, 'a query built before import must see the imported facts, as it sees an insert')
+    assert_equal(2, fb.size)
   end
 end

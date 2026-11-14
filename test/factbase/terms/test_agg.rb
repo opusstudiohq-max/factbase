@@ -1,10 +1,11 @@
 # frozen_string_literal: true
 
+# SPDX-FileCopyrightText: Copyright (c) 2024-2026 Yegor Bugayenko
+# SPDX-License-Identifier: MIT
+
 require_relative '../../../lib/factbase/syntax'
 require_relative '../../../lib/factbase/term'
 require_relative '../../../lib/factbase/terms/agg'
-# SPDX-FileCopyrightText: Copyright (c) 2024-2026 Yegor Bugayenko
-# SPDX-License-Identifier: MIT
 
 require_relative '../../test__helper'
 
@@ -85,6 +86,15 @@ class TestAgg < Factbase::Test
         fb.query("(eq salary (agg (eq dept $#{param}) (max salary)))").each(fb, param => ['eng']).map(&:salary),
         "parameter $#{param} wasn't passed to agg"
       )
+    end
+  end
+
+  def test_names_the_term_that_needs_a_fact_in_an_aggregate
+    fb = Factbase.new
+    fb.insert.x = 1
+    { '(exists x)' => 'exists', '(eq x 1)' => 'eq', '(plus x 1)' => 'plus' }.each do |inner, name|
+      e = assert_raises(StandardError) { fb.query("(agg (always) #{inner})").one }
+      assert_includes(e.message, "The '#{name}' term needs a fact", e.message)
     end
   end
 end

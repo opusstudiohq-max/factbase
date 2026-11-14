@@ -1,9 +1,10 @@
 # frozen_string_literal: true
 
-require_relative '../../../lib/factbase/term'
-require_relative '../../../lib/factbase/terms/unique'
 # SPDX-FileCopyrightText: Copyright (c) 2024-2026 Yegor Bugayenko
 # SPDX-License-Identifier: MIT
+
+require_relative '../../../lib/factbase/term'
+require_relative '../../../lib/factbase/terms/unique'
 
 require_relative '../../test__helper'
 
@@ -18,6 +19,16 @@ class TestUnique < Factbase::Test
     assert(t.evaluate(fact('foo' => 41), [], Factbase.new))
     refute(t.evaluate(fact('foo' => 41), [], Factbase.new))
     assert(t.evaluate(fact('foo' => 1), [], Factbase.new))
+  end
+
+  def test_forgets_seen_values
+    t = Factbase::Unique.new([:foo])
+    t.evaluate(fact('foo' => 'Привет'), [], Factbase.new)
+    t.forget
+    assert(
+      t.evaluate(fact('foo' => 'Привет'), [], Factbase.new),
+      'the value seen before forgetting is not unique any more'
+    )
   end
 
   def test_unique_when_one_value_is_new
